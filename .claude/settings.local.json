@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(npm test *)",
+      "Bash(node --check src/slots.js)",
+      "Bash(node --check src/logger.js)",
+      "Bash(node --check src/db.js)",
+      "Bash(node --check src/whatsapp.js)",
+      "Bash(node --check src/jobs/createMainPoll.js)",
+      "Bash(node -e \"try { const db = require\\('better-sqlite3'\\)\\(':memory:'\\); db.exec\\('CREATE TABLE t \\(x\\)'\\); console.log\\('sqlite ok'\\); } catch \\(e\\) { console.log\\('sqlite load failed:', e.message\\); }\")"
+    ]
+  }
+}

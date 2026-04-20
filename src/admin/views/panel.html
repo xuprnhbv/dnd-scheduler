@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>D&amp;D Bot Admin</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #0f0f10; color: #eee; margin: 0; padding: 20px; }
+    .container { max-width: 860px; margin: 0 auto; }
+    h1 { font-size: 22px; margin: 0 0 18px; }
+    h2 { font-size: 16px; margin: 24px 0 10px; color: #ccc; }
+    .card { background: #1a1a1c; border: 1px solid #26262a; border-radius: 8px; padding: 16px 18px; margin-bottom: 16px; }
+    .banner { background: #1b3a1b; border: 1px solid #2d5a2d; color: #cfe9cf; padding: 10px 14px; border-radius: 6px; margin-bottom: 16px; }
+    .banner.error { background: #3a1b1b; border-color: #5a2d2d; color: #f8caca; }
+    .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+    .row select, .row input { padding: 8px; background: #0f0f10; color: #eee; border: 1px solid #333; border-radius: 4px; font-size: 14px; }
+    .row input[type=number] { width: 90px; }
+    .row input[type=time] { width: 120px; }
+    .btn { padding: 8px 14px; background: #b00; color: #fff; border: 0; border-radius: 6px; cursor: pointer; font-size: 14px; }
+    .btn:hover { background: #d00; }
+    .btn.secondary { background: #333; }
+    .btn.secondary:hover { background: #444; }
+    .btn.danger { background: #700; }
+    .remove { background: #444; color: #fff; border: 0; border-radius: 4px; width: 32px; height: 32px; cursor: pointer; }
+    .remove:hover { background: #666; }
+    .muted { color: #888; font-size: 13px; }
+    .kv { display: grid; grid-template-columns: 200px 1fr; gap: 6px 12px; font-size: 14px; }
+    .kv div:nth-child(odd) { color: #888; }
+    .locked { color: #f88; }
+    .editable { color: #8f8; }
+    header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+    header form { margin: 0; }
+    .actions { display: flex; gap: 8px; margin-top: 14px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>D&amp;D Bot Admin</h1>
+      <form method="post" action="/logout"><button class="btn secondary" type="submit">Logout</button></form>
+    </header>
+
+    {{BANNER}}
+
+    <div class="card">
+      <h2>Next poll</h2>
+      <div class="kv">
+        <div>Week of</div><div>{{NEXT_WEEK}}</div>
+        <div>Poll will post</div><div>{{NEXT_POLL_TIME}}</div>
+        <div>Lock status</div><div>{{LOCK_STATUS}}</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Slots for next week</h2>
+      {{EDITOR}}
+    </div>
+
+    <div class="card">
+      <h2>Current week status</h2>
+      <div class="kv">
+        <div>Week of</div><div>{{CUR_WEEK}}</div>
+        <div>Poll posted</div><div>{{CUR_POLL}}</div>
+        <div>Reminder sent</div><div>{{CUR_REMINDER}}</div>
+        <div>Winner announced</div><div>{{CUR_WINNER_ANNOUNCED}}</div>
+        <div>Winner slot</div><div>{{CUR_WINNER_SLOT}}</div>
+        <div>Tiebreaker active</div><div>{{CUR_TIEBREAKER}}</div>
+      </div>
+    </div>
+  </div>
+
+  <template id="row-template">
+    <div class="row">
+      <select name="day">
+        <option>Monday</option><option>Tuesday</option><option>Wednesday</option>
+        <option>Thursday</option><option>Friday</option><option>Saturday</option><option>Sunday</option>
+      </select>
+      <input type="time" name="time" value="20:00" required />
+      <input type="number" name="durationHours" value="5" min="0.5" max="24" step="0.5" required />
+      <span class="muted">hours</span>
+      <button type="button" class="remove" title="Remove">&times;</button>
+    </div>
+  </template>
+
+  <script>
+    (function () {
+      const form = document.getElementById('slots-form');
+      if (!form) return;
+      const list = document.getElementById('rows');
+      const tpl = document.getElementById('row-template');
+      const template = {{TEMPLATE_JSON}};
+
+      function attachRemove(row) {
+        row.querySelector('.remove').addEventListener('click', () => {
+          if (list.querySelectorAll('.row').length > 1) row.remove();
+        });
+      }
+      list.querySelectorAll('.row').forEach(attachRemove);
+
+      document.getElementById('add-row').addEventListener('click', () => {
+        const clone = tpl.content.firstElementChild.cloneNode(true);
+        list.appendChild(clone);
+        attachRemove(clone);
+      });
+
+      document.getElementById('reset-template').addEventListener('click', () => {
+        list.innerHTML = '';
+        for (const s of template) {
+          const clone = tpl.content.firstElementChild.cloneNode(true);
+          clone.querySelector('[name=day]').value = s.day;
+          clone.querySelector('[name=time]').value = s.time;
+          clone.querySelector('[name=durationHours]').value = s.durationHours;
+          list.appendChild(clone);
+          attachRemove(clone);
+        }
+      });
+
+      form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const rows = list.querySelectorAll('.row');
+        const slots = [];
+        rows.forEach((row) => {
+          slots.push({
+            day: row.querySelector('[name=day]').value,
+            time: row.querySelector('[name=time]').value,
+            durationHours: parseFloat(row.querySelector('[name=durationHours]').value),
+          });
+        });
+        fetch('/slots', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ slots }),
+        }).then(async (r) => {
+          if (r.ok) { window.location.href = '/?saved=1'; }
+          else {
+            const body = await r.text();
+            alert('Save failed: ' + body);
+          }
+        }).catch((err) => alert('Save failed: ' + err.message));
+      });
+    })();
+  </script>
+</body>
+</html>

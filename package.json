@@ -1,0 +1,25 @@
+{
+  "name": "dnd-poll-bot",
+  "version": "1.0.0",
+  "description": "WhatsApp bot for weekly D&D session scheduling with native polls and an admin panel.",
+  "private": true,
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/*.test.js",
+    "hash-password": "node bin/hash-password.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "bcrypt": "^5.1.1",
+    "better-sqlite3": "^11.3.0",
+    "express": "^4.21.0",
+    "express-session": "^1.18.0",
+    "luxon": "^3.5.0",
+    "node-cron": "^3.0.3",
+    "qrcode-terminal": "^0.12.0",
+    "whatsapp-web.js": "^1.26.0"
+  }
+}

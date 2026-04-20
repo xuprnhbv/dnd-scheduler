@@ -1,0 +1,26 @@
+{
+  "timezone": "Asia/Jerusalem",
+  "groupId": "REPLACE_WITH_GROUP_ID@g.us",
+  "members": [
+    { "name": "Alice", "number": "972501234567" },
+    { "name": "Bob", "number": "972507654321" }
+  ],
+  "slotTemplate": {
+    "days": ["Thursday", "Friday", "Saturday"],
+    "times": ["10:00", "14:00", "20:00"],
+    "durationHours": 5
+  },
+  "adminPanel": {
+    "port": 3000,
+    "passwordHash": "REPLACE_WITH_BCRYPT_HASH",
+    "sessionSecret": "REPLACE_WITH_LONG_RANDOM_STRING"
+  },
+  "messages": {
+    "pollQuestion": "D&D session for the week of {weekStart} — which slots work for you? (each is {duration}h)",
+    "reminder": "Reminder: please vote in this week's D&D poll! {mentions}",
+    "winner": "🎲 This week's session: {slot}. See you there!",
+    "tiebreakerIntro": "We have a tie between {slots}. Please vote again:",
+    "tiebreakerWinner": "🎲 Tiebreaker decided: {slot}. See you there!",
+    "noVotes": "No votes received — no session scheduled for this week."
+  }
+}
