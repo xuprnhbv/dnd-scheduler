@@ -18,6 +18,7 @@ const {
   currentWeekStart,
   weekRangeLabel,
 } = require('../slots');
+const createMainPoll = require('../jobs/createMainPoll');
 const logger = require('../logger');
 
 const VIEW_DIR = path.join(__dirname, 'views');
@@ -127,11 +128,16 @@ function renderPanel({ config, db, banner = '', now = new Date() }) {
     CUR_TIEBREAKER: ctx.curState.tiebreakerPollId
       ? (ctx.curState.tiebreakerWinnerAnnounced ? 'Decided' : 'Active')
       : 'No',
+    SEND_POLL_BUTTON: ctx.curState.mainPollId
+      ? ''
+      : `<form method="post" action="/send-poll" style="margin-top:14px">
+           <button type="submit" class="btn">📨 Send poll now</button>
+         </form>`,
     TEMPLATE_JSON: JSON.stringify(template),
   });
 }
 
-function create({ config, db }) {
+function create({ config, db, whatsapp }) {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', 1); // trust first proxy hop for req.ip
@@ -171,13 +177,31 @@ function create({ config, db }) {
   app.get('/', requireAuth, (req, res) => {
     try {
       let banner = '';
-      if (req.query.saved) {
-        banner = '<div class="banner">Saved.</div>';
-      }
+      if (req.query.saved)  banner = '<div class="banner">✓ Slots saved.</div>';
+      if (req.query.polled) banner = '<div class="banner">✓ Poll sent to the group.</div>';
+      if (req.query.err === 'already-sent') banner = '<div class="banner error">Poll was already sent this week.</div>';
       res.type('text/html').send(renderPanel({ config, db, banner }));
     } catch (err) {
       logger.error('panel render error:', err);
       res.status(500).type('text/plain').send('Internal error');
+    }
+  });
+
+  app.post('/send-poll', requireAuth, async (req, res) => {
+    try {
+      const now = new Date();
+      const weekStart = currentWeekStart(now, config.timezone);
+      const state = db.getState(weekStart);
+      if (state && state.mainPollId) {
+        logger.warn('admin tried to send poll but it was already sent');
+        return res.redirect('/?err=already-sent');
+      }
+      logger.info('admin manually triggering createMainPoll');
+      await createMainPoll.run({ config, db, whatsapp });
+      return res.redirect('/?polled=1');
+    } catch (err) {
+      logger.error('admin send-poll error:', err);
+      return res.status(500).type('text/plain').send('Error: ' + escapeHtml(err.message));
     }
   });
 

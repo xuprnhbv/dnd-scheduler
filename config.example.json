@@ -1,6 +1,7 @@
 {
   "timezone": "Asia/Jerusalem",
   "groupId": "REPLACE_WITH_GROUP_ID@g.us",
+  "dmNumber": "REPLACE_WITH_DM_WHATSAPP_NUMBER",
   "members": [
     { "name": "Alice", "number": "972501234567" },
     { "name": "Bob", "number": "972507654321" }
@@ -21,6 +22,7 @@
     "winner": "🎲 This week's session: {slot}. See you there!",
     "tiebreakerIntro": "We have a tie between {slots}. Please vote again:",
     "tiebreakerWinner": "🎲 Tiebreaker decided: {slot}. See you there!",
-    "noVotes": "No votes received — no session scheduled for this week."
+    "noVotes": "No votes received — no session scheduled for this week.",
+    "dmUnavailable": "🎲 The DM has no available slots this week — session cancelled."
   }
 }
