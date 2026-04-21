@@ -91,7 +91,7 @@ async function main() {
   // Normal run: schedule jobs + start admin panel
   scheduler.start(ctx);
 
-  const app = adminServer.create({ config, db });
+  const app = adminServer.create({ config, db, whatsapp });
   const port = config.adminPanel.port || 3000;
   app.listen(port, () => {
     logger.info(`Admin panel listening on :${port}`);
@@ -101,6 +101,23 @@ async function main() {
   const weekStart = currentWeekStart(new Date(), config.timezone);
   const state = db.getState(weekStart);
   logger.info(`Startup: current week ${weekStart}`, state || { note: 'no state yet' });
+
+  // Print group IDs whenever a message arrives from a group.
+  // This is the most reliable way to discover the group ID — just send any
+  // message to your D&D WhatsApp group and the ID will appear in the log.
+  if (config.groupId.startsWith('REPLACE')) {
+    logger.info('groupId not set yet — send any message to your D&D group and the ID will appear here.');
+    // message_create fires for ALL messages (incl. ones sent from your own phone)
+    // message only fires for messages received from others
+    // We listen to both to catch every case
+    const logGroupMsg = (msg) => {
+      if (msg.from && msg.from.endsWith('@g.us')) {
+        logger.info(`GROUP ID FOUND  ->  ${msg.from}  (group message body: "${(msg.body || '').slice(0, 40)}")`);
+      }
+    };
+    whatsapp.client.on('message', logGroupMsg);
+    whatsapp.client.on('message_create', logGroupMsg);
+  }
 
   process.on('SIGTERM', async () => {
     logger.info('SIGTERM received, shutting down');

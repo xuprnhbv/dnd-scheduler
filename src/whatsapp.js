@@ -1,8 +1,63 @@
 'use strict';
 
+const fs = require('fs');
 const { Client, LocalAuth, Poll } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const logger = require('./logger');
+
+// Detect a system Chrome/Chromium to prefer over Puppeteer's bundled build.
+// On many Linux VPS setups the bundled Chromium has sandbox/context issues.
+function findChromePath() {
+  const candidates = [
+    '/usr/bin/google-chrome-stable',
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/chromium',
+    '/snap/bin/chromium',
+  ];
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) return p;
+    } catch (_) { /* ignore */ }
+  }
+  return null; // fall back to Puppeteer's bundled Chromium
+}
+
+function buildPuppeteerConfig() {
+  const executablePath = findChromePath();
+  const cfg = {
+    headless: true,
+    // protocolTimeout: 0 disables the CDP command timeout that can fire
+    // during WhatsApp's multi-step internal navigation, causing
+    // "Execution context was destroyed" to propagate out of initialize().
+    protocolTimeout: 0,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',        // avoid /dev/shm exhaustion on low-RAM VPS
+      '--disable-accelerated-2d-canvas',
+      '--disable-gpu',
+      '--no-first-run',
+      '--no-zygote',
+      '--disable-extensions',
+      '--disable-background-networking',
+      '--disable-default-apps',
+      '--disable-sync',
+      '--metrics-recording-only',
+      '--mute-audio',
+      '--no-default-browser-check',
+      '--hide-scrollbars',
+      '--disable-features=VizDisplayCompositor',
+    ],
+  };
+  if (executablePath) {
+    logger.info(`Puppeteer: using system Chrome at ${executablePath}`);
+    cfg.executablePath = executablePath;
+  } else {
+    logger.info('Puppeteer: using bundled Chromium');
+  }
+  return cfg;
+}
 
 function contactIdFromNumber(number) {
   const clean = String(number).replace(/[^0-9]/g, '');
@@ -18,6 +73,7 @@ function createWhatsApp() {
   let client = null;
   let ready = false;
   let readyResolvers = [];
+  let destroyed = false; // set on intentional destroy() so reconnect loop stops
 
   function notifyReady() {
     ready = true;
@@ -26,7 +82,7 @@ function createWhatsApp() {
     for (const r of resolvers) r();
   }
 
-  function waitForReady(timeoutMs = 60000) {
+  function waitForReady(timeoutMs = 120000) {
     if (ready) return Promise.resolve();
     return new Promise((resolve, reject) => {
       const t = setTimeout(() => {
@@ -41,42 +97,73 @@ function createWhatsApp() {
     });
   }
 
-  async function init() {
-    client = new Client({
-      authStrategy: new LocalAuth({ dataPath: './.wwebjs_auth' }),
-      puppeteer: {
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-        ],
-      },
-    });
+  // Build a fresh Client, register all event listeners, and call initialize().
+  // Retries on the "Execution context was destroyed" error which whatsapp-web.js
+  // can surface when WhatsApp does an internal page navigation during startup.
+  async function init(maxRetries = 3) {
+    destroyed = false;
 
-    client.on('qr', (qr) => {
-      logger.info('WhatsApp QR code — scan with your phone:');
-      qrcode.generate(qr, { small: true });
-    });
-
-    client.on('authenticated', () => logger.info('WhatsApp authenticated'));
-    client.on('auth_failure', (msg) => logger.error('WhatsApp auth failure:', msg));
-
-    client.on('ready', () => {
-      logger.info('WhatsApp client ready');
-      notifyReady();
-    });
-
-    client.on('disconnected', (reason) => {
-      logger.warn('WhatsApp disconnected:', reason);
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      // Destroy any previous instance before creating a new one.
+      if (client) {
+        try { await client.destroy(); } catch (_) { /* ignore */ }
+        client = null;
+      }
       ready = false;
-      // Attempt reconnect
-      setTimeout(() => {
-        logger.info('Attempting to reinitialize WhatsApp client...');
-        client.initialize().catch((err) => logger.error('Reinit failed:', err));
-      }, 5000);
-    });
 
-    await client.initialize();
+      client = new Client({
+        authStrategy: new LocalAuth({ dataPath: './.wwebjs_auth' }),
+        puppeteer: buildPuppeteerConfig(),
+      });
+
+      client.on('qr', (qr) => {
+        logger.info('WhatsApp QR code — scan with your phone:');
+        qrcode.generate(qr, { small: true });
+      });
+
+      client.on('authenticated', () => logger.info('WhatsApp authenticated'));
+      client.on('auth_failure', (msg) => logger.error('WhatsApp auth failure:', msg));
+
+      client.on('ready', () => {
+        logger.info('WhatsApp client ready');
+        notifyReady();
+      });
+
+      // On disconnect, spin up a brand-new client after a short delay.
+      // We use the module-level `init()` so the reconnect also gets retries.
+      client.on('disconnected', (reason) => {
+        logger.warn('WhatsApp disconnected:', reason);
+        ready = false;
+        if (destroyed) return; // intentional shutdown — don't reconnect
+        setTimeout(() => {
+          logger.info('Attempting to reinitialize WhatsApp client...');
+          init().catch((err) => logger.error('Reinit failed:', err));
+        }, 5000);
+      });
+
+      try {
+        await client.initialize();
+        return; // success — exit retry loop
+      } catch (err) {
+        const isNavError =
+          err && err.message &&
+          (err.message.includes('Execution context was destroyed') ||
+           err.message.includes('Target closed'));
+
+        if (isNavError && attempt < maxRetries) {
+          logger.warn(
+            `WhatsApp init attempt ${attempt}/${maxRetries} failed ` +
+            `(navigation/context error — WhatsApp is mid-redirect). ` +
+            `Retrying in 5 s...`,
+          );
+          await new Promise((r) => setTimeout(r, 5000));
+          continue;
+        }
+
+        // Non-navigation error or out of retries — propagate.
+        throw err;
+      }
+    }
   }
 
   async function ensureReady() {
@@ -114,19 +201,18 @@ function createWhatsApp() {
     }
   }
 
-  // Returns a map: { [optionName]: Set<senderNumber> }
-  // Counts each distinct voter once per option they selected.
+  // Returns { counts, voters, allVoters, options }
+  // counts: { [optionName]: number }  — unique voters per option
+  // allVoters: string[]               — every number that voted at all
   async function readPollVotes(chatId, pollMsgId) {
     await ensureReady();
     const msg = await getMessageById(chatId, pollMsgId);
     if (!msg) throw new Error(`Poll message not found: ${pollMsgId}`);
 
-    const options = (msg.pollOptions || msg.poll && msg.poll.options || []).map(
+    const options = (msg.pollOptions || (msg.poll && msg.poll.options) || []).map(
       (o, i) => ({ name: o.name || o.optionName || o, localId: o.localId != null ? o.localId : i }),
     );
 
-    // whatsapp-web.js emits 'vote_update' events; for reading historical
-    // votes we rely on msg.pollVotes which the library populates.
     const rawVotes = msg.pollVotes || [];
 
     const optionVoters = new Map();
@@ -139,7 +225,6 @@ function createWhatsApp() {
       if (!voter) continue;
       const selected = vote.selectedOptions || vote.selected || [];
       for (const sel of selected) {
-        // selection can be a localId or an option object
         let name = null;
         if (sel && typeof sel === 'object') {
           name = sel.name || sel.optionName || null;
@@ -186,8 +271,9 @@ function createWhatsApp() {
   }
 
   async function destroy() {
+    destroyed = true;
     if (client) {
-      try { await client.destroy(); } catch (_err) { /* ignore */ }
+      try { await client.destroy(); } catch (_) { /* ignore */ }
     }
   }
 

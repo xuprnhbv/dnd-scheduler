@@ -20,6 +20,32 @@ function findTopOptions(counts) {
   return { max, tied };
 }
 
+/**
+ * If a dmNumber is configured, filter `counts` down to only the slots
+ * that the DM voted for (i.e. the DM is available for those slots).
+ * Returns { effectiveCounts, dmFiltered, dmHadNoSlots }.
+ *   dmFiltered   — true if the filter was applied
+ *   dmHadNoSlots — true if the DM voted for nothing (or didn't vote at all)
+ */
+function applyDmFilter(counts, voters, config) {
+  if (!config.dmNumber) {
+    return { effectiveCounts: counts, dmFiltered: false, dmHadNoSlots: false };
+  }
+
+  const dmNum = String(config.dmNumber).replace(/\D/g, '');
+  const effectiveCounts = {};
+
+  for (const [slot, count] of Object.entries(counts)) {
+    const slotVoters = voters[slot] || [];
+    if (slotVoters.map((n) => String(n).replace(/\D/g, '')).includes(dmNum)) {
+      effectiveCounts[slot] = count;
+    }
+  }
+
+  const dmHadNoSlots = Object.keys(effectiveCounts).length === 0;
+  return { effectiveCounts, dmFiltered: true, dmHadNoSlots };
+}
+
 async function run({ config, db, whatsapp, now = new Date() }) {
   const weekStart = currentWeekStart(now, config.timezone);
   const state = db.getState(weekStart);
@@ -33,8 +59,24 @@ async function run({ config, db, whatsapp, now = new Date() }) {
     return { skipped: true, reason: 'already-handled' };
   }
 
-  const { counts } = await whatsapp.readPollVotes(config.groupId, state.mainPollId);
-  const { max, tied } = findTopOptions(counts);
+  const { counts, voters } = await whatsapp.readPollVotes(config.groupId, state.mainPollId);
+
+  // --- DM availability filter ---
+  const { effectiveCounts, dmFiltered, dmHadNoSlots } = applyDmFilter(counts, voters, config);
+
+  if (dmFiltered) {
+    if (dmHadNoSlots) {
+      const msg = config.messages.dmUnavailable || '🎲 The DM has no available slots this week — session cancelled.';
+      await whatsapp.sendText(config.groupId, msg);
+      db.setWinner(weekStart, '');
+      logger.info(`[announceWinner] DM (${config.dmNumber}) has no available slots for week ${weekStart}`);
+      return { skipped: false, outcome: 'dm-unavailable' };
+    }
+    const eligible = Object.keys(effectiveCounts).join(', ');
+    logger.info(`[announceWinner] DM filter applied — eligible slots: ${eligible}`);
+  }
+
+  const { max, tied } = findTopOptions(effectiveCounts);
 
   if (max === 0) {
     await whatsapp.sendText(config.groupId, config.messages.noVotes);
@@ -52,7 +94,7 @@ async function run({ config, db, whatsapp, now = new Date() }) {
     return { skipped: false, outcome: 'winner', winner };
   }
 
-  // Tie — post a tiebreaker poll with the tied options only.
+  // Tie — post a tiebreaker poll with only the tied DM-approved options.
   const intro = renderTemplate(config.messages.tiebreakerIntro, {
     slots: tied.join(', '),
   });
@@ -65,7 +107,7 @@ async function run({ config, db, whatsapp, now = new Date() }) {
   const ts = Math.floor(DateTime.now().setZone(config.timezone).toSeconds());
   db.setTiebreaker(weekStart, pollId, ts);
 
-  logger.info(`[announceWinner] tie between ${tied.length} options, tiebreaker ${pollId}`);
+  logger.info(`[announceWinner] tie between ${tied.length} DM-approved options, tiebreaker ${pollId}`);
   return { skipped: false, outcome: 'tie', tied, tiebreakerPollId: pollId };
 }
 
