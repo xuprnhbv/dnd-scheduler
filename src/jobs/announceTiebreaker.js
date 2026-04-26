@@ -10,7 +10,7 @@ function renderTemplate(tpl, vars) {
   );
 }
 
-async function run({ config, db, whatsapp, now = new Date() }) {
+async function run({ config, db, whatsapp, googleForm, now = new Date() }) {
   const weekStart = currentWeekStart(now, config.timezone);
   const state = db.getState(weekStart);
 
@@ -38,8 +38,13 @@ async function run({ config, db, whatsapp, now = new Date() }) {
   }
 
   const text = renderTemplate(config.messages.tiebreakerWinner, { slot: winner });
-  await whatsapp.sendText(config.groupId, text);
+  const winnerMsg = await whatsapp.sendText(config.groupId, text);
+  await whatsapp.pinMessage(winnerMsg);
   db.setTiebreakerWinner(weekStart, winner);
+
+  if (googleForm && typeof googleForm.deleteAllResponses === 'function') {
+    await googleForm.deleteAllResponses();
+  }
 
   logger.info(`[announceTiebreaker] tiebreaker winner: ${winner}`);
   return { skipped: false, winner };

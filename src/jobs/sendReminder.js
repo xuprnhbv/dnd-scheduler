@@ -1,7 +1,6 @@
 'use strict';
 
 const { currentWeekStart } = require('../slots');
-const { contactIdFromNumber } = require('../whatsapp');
 const logger = require('../logger');
 
 function renderTemplate(tpl, vars) {
@@ -10,54 +9,40 @@ function renderTemplate(tpl, vars) {
   );
 }
 
-async function run({ config, db, whatsapp, now = new Date() }) {
+async function run({ config, db, whatsapp, googleForm, now = new Date() }) {
   const weekStart = currentWeekStart(now, config.timezone);
   const state = db.getState(weekStart);
 
   if (!state || !state.mainPollId) {
-    logger.info(`[sendReminder] no main poll for week ${weekStart}; skipping`);
-    return { skipped: true, reason: 'no-poll' };
+    logger.info(`[sendReminder] no form announcement for week ${weekStart}; skipping`);
+    return { skipped: true, reason: 'no-announcement' };
   }
   if (state.reminderSent) {
     logger.info(`[sendReminder] reminder already sent for week ${weekStart}; skipping`);
     return { skipped: true, reason: 'already-sent' };
   }
 
-  const { allVoters } = await whatsapp.readPollVotes(config.groupId, state.mainPollId);
-  const voted = new Set(allVoters);
+  const { playerResponses } = await googleForm.readResponses();
+  const filledCount = playerResponses.length;
+  const playerCount = Number(config.playerCount) || 0;
 
-  // Members from config, intersected with group participants so we don't tag
-  // numbers that aren't in the group.
-  let groupNumbers;
-  try {
-    groupNumbers = new Set(await whatsapp.getGroupParticipantNumbers(config.groupId));
-  } catch (err) {
-    logger.warn('[sendReminder] could not fetch group participants, proceeding with config only:', err.message);
-    groupNumbers = null;
-  }
-
-  const nonVoters = config.members.filter((m) => {
-    const num = String(m.number).replace(/[^0-9]/g, '');
-    if (voted.has(num)) return false;
-    if (groupNumbers && !groupNumbers.has(num)) return false;
-    return true;
-  });
-
-  if (nonVoters.length === 0) {
-    logger.info(`[sendReminder] everyone has voted for week ${weekStart}; skipping`);
+  if (playerCount > 0 && filledCount >= playerCount) {
+    logger.info(`[sendReminder] ${filledCount}/${playerCount} already filled; skipping reminder`);
     db.setReminderSent(weekStart);
-    return { skipped: true, reason: 'all-voted' };
+    return { skipped: true, reason: 'all-filled', filledCount, playerCount };
   }
 
-  const mentionIds = nonVoters.map((m) => contactIdFromNumber(m.number));
-  const mentionText = nonVoters.map((m) => `@${String(m.number).replace(/[^0-9]/g, '')}`).join(' ');
-
-  const text = renderTemplate(config.messages.reminder, { mentions: mentionText });
-  await whatsapp.sendText(config.groupId, text, { mentions: mentionIds });
+  const text = renderTemplate(config.messages.reminder, {
+    filledCount,
+    playerCount,
+    formUrl: config.googleForm.publicUrl,
+  });
+  const msg = await whatsapp.sendText(config.groupId, text);
+  await whatsapp.pinMessage(msg);
   db.setReminderSent(weekStart);
 
-  logger.info(`[sendReminder] reminded ${nonVoters.length} non-voters for week ${weekStart}`);
-  return { skipped: false, reminded: nonVoters.length };
+  logger.info(`[sendReminder] reminded — ${filledCount}/${playerCount} filled for week ${weekStart}`);
+  return { skipped: false, filledCount, playerCount };
 }
 
 module.exports = { run };

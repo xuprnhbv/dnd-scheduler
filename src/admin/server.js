@@ -12,13 +12,11 @@ const {
   createRateLimiter,
 } = require('./auth');
 const {
-  expandTemplate,
-  validateSlots,
   nextPollWeekStart,
   currentWeekStart,
   weekRangeLabel,
 } = require('../slots');
-const createMainPoll = require('../jobs/createMainPoll');
+const postFormLink = require('../jobs/postFormLink');
 const logger = require('../logger');
 
 const VIEW_DIR = path.join(__dirname, 'views');
@@ -40,40 +38,7 @@ function render(template, vars) {
   );
 }
 
-function renderEditor(slots, locked) {
-  const dayOpts = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-  const rows = slots.map((s) => {
-    const options = dayOpts
-      .map((d) => `<option${d === s.day ? ' selected' : ''}>${d}</option>`)
-      .join('');
-    return `
-      <div class="row">
-        <select name="day"${locked ? ' disabled' : ''}>${options}</select>
-        <input type="time" name="time" value="${escapeHtml(s.time)}" ${locked ? 'disabled' : 'required'} />
-        <input type="number" name="durationHours" value="${escapeHtml(s.durationHours)}" min="0.5" max="24" step="0.5" ${locked ? 'disabled' : 'required'} />
-        <span class="muted">hours</span>
-        <button type="button" class="remove"${locked ? ' disabled' : ''} title="Remove">&times;</button>
-      </div>`;
-  }).join('');
-
-  if (locked) {
-    return `
-      <p class="muted">This week's slots are locked — the poll has already been posted. You can edit next week's slots after the current week closes.</p>
-      <div id="rows">${rows}</div>`;
-  }
-
-  return `
-    <form id="slots-form">
-      <div id="rows">${rows || ''}</div>
-      <div class="actions">
-        <button type="button" id="add-row" class="btn secondary">+ Add slot</button>
-        <button type="button" id="reset-template" class="btn secondary">Reset to template</button>
-        <button type="submit" class="btn">Save</button>
-      </div>
-    </form>`;
-}
-
-function buildPanelContext({ config, db, now = new Date() }) {
+async function buildPanelContext({ config, db, googleForm, now = new Date() }) {
   const tz = config.timezone;
   const curWeek = currentWeekStart(now, tz);
   const nextWeek = nextPollWeekStart(now, tz);
@@ -82,44 +47,58 @@ function buildPanelContext({ config, db, now = new Date() }) {
     mainPollId: null, reminderSent: false, winnerAnnounced: false,
     winnerSlot: null, tiebreakerPollId: null, tiebreakerWinnerAnnounced: false,
   };
-  const nextState = db.getState(nextWeek);
-
-  const nextLocked = !!(nextState && nextState.slotsLocked);
-  const storedSlots = db.getSlots(nextWeek);
-  const slots = Array.isArray(storedSlots) && storedSlots.length > 0
-    ? storedSlots
-    : expandTemplate(config.slotTemplate);
 
   const nextPollTime = DateTime.fromISO(nextWeek, { zone: tz })
     .set({ hour: 10, minute: 0 })
     .toFormat('EEE dd LLL yyyy, HH:mm ZZZZ');
+
+  let filledCount = null;
+  let dmResponded = null;
+  if (googleForm) {
+    try {
+      const { playerResponses, dmResponse } = await googleForm.readResponses();
+      filledCount = playerResponses.length;
+      dmResponded = !!dmResponse;
+    } catch (err) {
+      logger.warn('[admin] readResponses failed:', err.message);
+    }
+  }
 
   return {
     tz,
     curWeek,
     nextWeek,
     curState,
-    nextState,
-    nextLocked,
-    slots,
     nextPollTime,
+    filledCount,
+    dmResponded,
   };
 }
 
-function renderPanel({ config, db, banner = '', now = new Date() }) {
-  const ctx = buildPanelContext({ config, db, now });
-  const template = expandTemplate(config.slotTemplate);
+async function renderPanel({ config, db, googleForm, banner = '', now = new Date() }) {
+  const ctx = await buildPanelContext({ config, db, googleForm, now });
+  const playerCount = Number(config.playerCount) || 0;
+  const formUrl = (config.googleForm && config.googleForm.publicUrl) || '';
+
+  const responsesCell = ctx.filledCount == null
+    ? '<span class="muted">—</span>'
+    : `${escapeHtml(ctx.filledCount)} / ${escapeHtml(playerCount)}`;
+  const dmCell = ctx.dmResponded == null
+    ? '<span class="muted">—</span>'
+    : (ctx.dmResponded ? 'Yes' : '<span class="locked">Not yet</span>');
 
   return render(PANEL_HTML, {
     BANNER: banner,
     NEXT_WEEK: escapeHtml(weekRangeLabel(ctx.nextWeek, ctx.tz)),
     NEXT_POLL_TIME: escapeHtml(ctx.nextPollTime),
-    LOCK_STATUS: ctx.nextLocked
-      ? '<span class="locked">Locked (poll already posted)</span>'
-      : '<span class="editable">Editable</span>',
-    EDITOR: renderEditor(ctx.slots, ctx.nextLocked),
+    FORM_URL: escapeHtml(formUrl),
+    FORM_URL_LINK: formUrl
+      ? `<a href="${escapeHtml(formUrl)}" target="_blank" rel="noopener">Open form</a>`
+      : '<span class="muted">—</span>',
+    RESPONSES: responsesCell,
+    DM_RESPONDED: dmCell,
     CUR_WEEK: escapeHtml(weekRangeLabel(ctx.curWeek, ctx.tz)),
-    CUR_POLL: ctx.curState.mainPollId ? 'Yes' : 'No',
+    CUR_ANNOUNCED: ctx.curState.mainPollId ? 'Yes' : 'No',
     CUR_REMINDER: ctx.curState.reminderSent ? 'Yes' : 'No',
     CUR_WINNER_ANNOUNCED: ctx.curState.winnerAnnounced ? 'Yes' : 'No',
     CUR_WINNER_SLOT: ctx.curState.winnerSlot
@@ -128,19 +107,18 @@ function renderPanel({ config, db, banner = '', now = new Date() }) {
     CUR_TIEBREAKER: ctx.curState.tiebreakerPollId
       ? (ctx.curState.tiebreakerWinnerAnnounced ? 'Decided' : 'Active')
       : 'No',
-    SEND_POLL_BUTTON: ctx.curState.mainPollId
+    SEND_FORM_BUTTON: ctx.curState.mainPollId
       ? ''
-      : `<form method="post" action="/send-poll" style="margin-top:14px">
-           <button type="submit" class="btn">📨 Send poll now</button>
+      : `<form method="post" action="/send-form" style="margin-top:14px">
+           <button type="submit" class="btn">📨 Send form link now</button>
          </form>`,
-    TEMPLATE_JSON: JSON.stringify(template),
   });
 }
 
-function create({ config, db, whatsapp }) {
+function create({ config, db, whatsapp, googleForm }) {
   const app = express();
   app.disable('x-powered-by');
-  app.set('trust proxy', 1); // trust first proxy hop for req.ip
+  app.set('trust proxy', 1);
   app.use(express.urlencoded({ extended: false }));
   app.use(express.json({ limit: '64kb' }));
   app.use(sessionMiddleware(config));
@@ -174,59 +152,34 @@ function create({ config, db, whatsapp }) {
     req.session.destroy(() => res.redirect('/login'));
   });
 
-  app.get('/', requireAuth, (req, res) => {
+  app.get('/', requireAuth, async (req, res) => {
     try {
       let banner = '';
-      if (req.query.saved)  banner = '<div class="banner">✓ Slots saved.</div>';
-      if (req.query.polled) banner = '<div class="banner">✓ Poll sent to the group.</div>';
-      if (req.query.err === 'already-sent') banner = '<div class="banner error">Poll was already sent this week.</div>';
-      res.type('text/html').send(renderPanel({ config, db, banner }));
+      if (req.query.sent) banner = '<div class="banner">✓ Form link sent to the group.</div>';
+      if (req.query.err === 'already-sent') banner = '<div class="banner error">Form link was already sent this week.</div>';
+      const html = await renderPanel({ config, db, googleForm, banner });
+      res.type('text/html').send(html);
     } catch (err) {
       logger.error('panel render error:', err);
       res.status(500).type('text/plain').send('Internal error');
     }
   });
 
-  app.post('/send-poll', requireAuth, async (req, res) => {
+  app.post('/send-form', requireAuth, async (req, res) => {
     try {
       const now = new Date();
       const weekStart = currentWeekStart(now, config.timezone);
       const state = db.getState(weekStart);
       if (state && state.mainPollId) {
-        logger.warn('admin tried to send poll but it was already sent');
+        logger.warn('admin tried to send form link but it was already sent');
         return res.redirect('/?err=already-sent');
       }
-      logger.info('admin manually triggering createMainPoll');
-      await createMainPoll.run({ config, db, whatsapp });
-      return res.redirect('/?polled=1');
+      logger.info('admin manually triggering postFormLink');
+      await postFormLink.run({ config, db, whatsapp, googleForm });
+      return res.redirect('/?sent=1');
     } catch (err) {
-      logger.error('admin send-poll error:', err);
+      logger.error('admin send-form error:', err);
       return res.status(500).type('text/plain').send('Error: ' + escapeHtml(err.message));
-    }
-  });
-
-  app.post('/slots', requireAuth, (req, res) => {
-    try {
-      const now = new Date();
-      const targetWeek = nextPollWeekStart(now, config.timezone);
-      const state = db.getState(targetWeek);
-      if (state && state.slotsLocked) {
-        return res.status(409).type('text/plain').send('Slots are locked for the target week.');
-      }
-      const body = req.body || {};
-      const slots = Array.isArray(body.slots) ? body.slots.map((s) => ({
-        day: String(s.day),
-        time: String(s.time),
-        durationHours: Number(s.durationHours),
-      })) : null;
-      const v = validateSlots(slots);
-      if (!v.ok) return res.status(400).type('text/plain').send(v.error);
-      db.upsertSlots(targetWeek, slots);
-      logger.info(`admin updated slots for week ${targetWeek} (${slots.length} rows)`);
-      return res.status(200).type('text/plain').send('OK');
-    } catch (err) {
-      logger.error('slots update error:', err);
-      return res.status(500).type('text/plain').send('Internal error');
     }
   });
 

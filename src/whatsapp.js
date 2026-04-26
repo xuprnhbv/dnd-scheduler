@@ -182,6 +182,22 @@ function createWhatsApp() {
     return msg;
   }
 
+  // Pin a message for the given duration (default 7 days).
+  // WhatsApp only accepts three durations: 86400 (24h), 604800 (7d), 2592000 (30d).
+  // Non-fatal: logs a warning if pinning fails (e.g. bot is not a group admin).
+  async function pinMessage(msg, durationSecs = 604800) {
+    if (!msg || typeof msg.pin !== 'function') {
+      logger.warn('[pinMessage] message does not support pin(); skipping');
+      return;
+    }
+    try {
+      await msg.pin(durationSecs);
+      logger.info('[pinMessage] message pinned for', durationSecs, 'seconds');
+    } catch (err) {
+      logger.warn('[pinMessage] could not pin message (bot may not be a group admin):', err.message);
+    }
+  }
+
   // Fetch a message by chatId + serialized message id. Returns null if missing.
   async function getMessageById(chatId, msgId) {
     await ensureReady();
@@ -283,6 +299,7 @@ function createWhatsApp() {
     waitForReady,
     sendText,
     sendPoll,
+    pinMessage,
     getMessageById,
     readPollVotes,
     getGroupParticipantNumbers,
