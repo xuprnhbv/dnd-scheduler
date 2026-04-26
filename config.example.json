@@ -1,15 +1,22 @@
 {
   "timezone": "Asia/Jerusalem",
   "groupId": "REPLACE_WITH_GROUP_ID@g.us",
-  "dmNumber": "REPLACE_WITH_DM_WHATSAPP_NUMBER",
-  "members": [
-    { "name": "Alice", "number": "972501234567" },
-    { "name": "Bob", "number": "972507654321" }
-  ],
-  "slotTemplate": {
-    "days": ["Thursday", "Friday", "Saturday"],
-    "times": ["10:00", "14:00", "20:00"],
-    "durationHours": 5
+  "playerCount": 5,
+  "googleForm": {
+    "formId": "REPLACE_WITH_FORM_ID",
+    "publicUrl": "https://docs.google.com/forms/d/e/REPLACE_WITH_PUBLIC_ID/viewform",
+    "serviceAccountKeyPath": "./service-account.json",
+    "playerSlotQuestions": {
+      "REPLACE_ROW1_ID": "Slot 1 label",
+      "REPLACE_ROW2_ID": "Slot 2 label"
+    },
+    "dmSlotQuestions": {
+      "REPLACE_DM_ROW1_ID": "Slot 1 label",
+      "REPLACE_DM_ROW2_ID": "Slot 2 label"
+    },
+    "unavailableAnswer": "REPLACE_WITH_CANNOT_PLAY_OPTION_TEXT",
+    "deleteWebhookUrl": "REPLACE_WITH_APPS_SCRIPT_WEB_APP_URL",
+    "deleteWebhookSecret": "REPLACE_WITH_LONG_RANDOM_STRING"
   },
   "adminPanel": {
     "port": 3000,
@@ -17,12 +24,13 @@
     "sessionSecret": "REPLACE_WITH_LONG_RANDOM_STRING"
   },
   "messages": {
-    "pollQuestion": "D&D session for the week of {weekStart} — which slots work for you? (each is {duration}h)",
-    "reminder": "Reminder: please vote in this week's D&D poll! {mentions}",
+    "formAnnouncement": "D&D form for the week of {weekStart}: {formUrl}",
+    "reminder": "Reminder: {filledCount} people filled the form out of {playerCount} players! {formUrl}",
     "winner": "🎲 This week's session: {slot}. See you there!",
     "tiebreakerIntro": "We have a tie between {slots}. Please vote again:",
     "tiebreakerWinner": "🎲 Tiebreaker decided: {slot}. See you there!",
-    "noVotes": "No votes received — no session scheduled for this week.",
-    "dmUnavailable": "🎲 The DM has no available slots this week — session cancelled."
+    "noResponses": "No responses received — no session scheduled for this week.",
+    "dmUnavailable": "🎲 The DM has no available slots this week — session cancelled.",
+    "dmNoResponse": "⏳ The DM hasn't filled the form yet — holding off on picking a slot."
   }
 }

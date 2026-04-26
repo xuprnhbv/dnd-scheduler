@@ -28,15 +28,8 @@ function migrate(db) {
       tiebreaker_winner_announced INTEGER NOT NULL DEFAULT 0
     );
 
-    CREATE TABLE IF NOT EXISTS weekly_slots (
-      week_start TEXT PRIMARY KEY,
-      slots_json TEXT NOT NULL
-    );
+    DROP TABLE IF EXISTS weekly_slots;
   `);
-}
-
-function boolToInt(v) {
-  return v ? 1 : 0;
 }
 
 function rowToState(row) {
@@ -62,10 +55,7 @@ function wrap(db) {
       'INSERT OR IGNORE INTO poll_state (week_start) VALUES (?)',
     ),
     setMainPoll: db.prepare(
-      'UPDATE poll_state SET main_poll_id = ?, main_poll_timestamp = ?, slots_locked = 1 WHERE week_start = ?',
-    ),
-    setSlotsLocked: db.prepare(
-      'UPDATE poll_state SET slots_locked = ? WHERE week_start = ?',
+      'UPDATE poll_state SET main_poll_id = ?, main_poll_timestamp = ? WHERE week_start = ?',
     ),
     setReminderSent: db.prepare(
       'UPDATE poll_state SET reminder_sent = 1 WHERE week_start = ?',
@@ -79,12 +69,6 @@ function wrap(db) {
     setTiebreakerWinner: db.prepare(
       'UPDATE poll_state SET tiebreaker_winner_announced = 1, winner_slot = ? WHERE week_start = ?',
     ),
-    getSlots: db.prepare('SELECT slots_json FROM weekly_slots WHERE week_start = ?'),
-    upsertSlots: db.prepare(
-      `INSERT INTO weekly_slots (week_start, slots_json) VALUES (?, ?)
-       ON CONFLICT(week_start) DO UPDATE SET slots_json = excluded.slots_json`,
-    ),
-    deleteSlots: db.prepare('DELETE FROM weekly_slots WHERE week_start = ?'),
     allStates: db.prepare('SELECT * FROM poll_state ORDER BY week_start DESC LIMIT ?'),
   };
 
@@ -100,11 +84,6 @@ function wrap(db) {
   function setMainPoll(weekStart, pollId, timestamp) {
     ensureState(weekStart);
     stmts.setMainPoll.run(pollId, timestamp, weekStart);
-  }
-
-  function setSlotsLocked(weekStart, locked) {
-    ensureState(weekStart);
-    stmts.setSlotsLocked.run(boolToInt(locked), weekStart);
   }
 
   function setReminderSent(weekStart) {
@@ -127,24 +106,6 @@ function wrap(db) {
     stmts.setTiebreakerWinner.run(slotLabel, weekStart);
   }
 
-  function getSlots(weekStart) {
-    const row = stmts.getSlots.get(weekStart);
-    if (!row) return null;
-    try {
-      return JSON.parse(row.slots_json);
-    } catch (_err) {
-      return null;
-    }
-  }
-
-  function upsertSlots(weekStart, slots) {
-    stmts.upsertSlots.run(weekStart, JSON.stringify(slots));
-  }
-
-  function deleteSlots(weekStart) {
-    stmts.deleteSlots.run(weekStart);
-  }
-
   function recentStates(limit = 10) {
     return stmts.allStates.all(limit).map(rowToState);
   }
@@ -158,14 +119,10 @@ function wrap(db) {
     ensureState,
     getState,
     setMainPoll,
-    setSlotsLocked,
     setReminderSent,
     setWinner,
     setTiebreaker,
     setTiebreakerWinner,
-    getSlots,
-    upsertSlots,
-    deleteSlots,
     recentStates,
     close,
   };

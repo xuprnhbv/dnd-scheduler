@@ -6,6 +6,7 @@ const path = require('path');
 const logger = require('./logger');
 const dbLib = require('./db');
 const { createWhatsApp } = require('./whatsapp');
+const { createGoogleForm } = require('./googleform');
 const scheduler = require('./scheduler');
 const adminServer = require('./admin/server');
 const { currentWeekStart } = require('./slots');
@@ -20,12 +21,24 @@ function loadConfig() {
   const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
   const cfg = JSON.parse(raw);
   const missing = [];
-  for (const k of ['timezone', 'groupId', 'members', 'slotTemplate', 'adminPanel', 'messages']) {
-    if (!cfg[k]) missing.push(k);
+  for (const k of ['timezone', 'groupId', 'playerCount', 'googleForm', 'adminPanel', 'messages']) {
+    if (cfg[k] == null) missing.push(k);
   }
   if (missing.length) {
     logger.error(`config.json missing fields: ${missing.join(', ')}`);
     process.exit(1);
+  }
+  for (const k of ['formId', 'publicUrl', 'serviceAccountKeyPath']) {
+    if (!cfg.googleForm[k] || String(cfg.googleForm[k]).startsWith('REPLACE')) {
+      logger.error(`config.googleForm.${k} is not set`);
+      process.exit(1);
+    }
+  }
+  for (const k of ['playerSlotQuestions', 'dmSlotQuestions']) {
+    if (!cfg.googleForm[k] || typeof cfg.googleForm[k] !== 'object' || !Object.keys(cfg.googleForm[k]).length) {
+      logger.error(`config.googleForm.${k} must be an object mapping questionId → slot label`);
+      process.exit(1);
+    }
   }
   if (!cfg.adminPanel.passwordHash || cfg.adminPanel.passwordHash.startsWith('REPLACE')) {
     logger.error('config.adminPanel.passwordHash is not set. Run: node bin/hash-password.js <your-password>');
@@ -35,11 +48,10 @@ function loadConfig() {
 }
 
 const TEST_JOBS = {
-  'create-poll': 'createMainPoll',
+  'post-form-link': 'postFormLink',
   'send-reminder': 'sendReminder',
   'announce-winner': 'announceWinner',
   'announce-tiebreaker': 'announceTiebreaker',
-  'seed-next-week': 'seedNextWeekSlots',
 };
 
 function parseArgs(argv) {
@@ -70,12 +82,13 @@ async function main() {
   const args = parseArgs(process.argv);
   const config = loadConfig();
   const db = dbLib.open();
+  const googleForm = createGoogleForm(config.googleForm);
 
   const whatsapp = createWhatsApp();
   await whatsapp.init();
   await whatsapp.ensureReady();
 
-  const ctx = { config, db, whatsapp };
+  const ctx = { config, db, whatsapp, googleForm };
 
   if (args.test) {
     try {
@@ -88,28 +101,22 @@ async function main() {
     return;
   }
 
-  // Normal run: schedule jobs + start admin panel
   scheduler.start(ctx);
 
-  const app = adminServer.create({ config, db, whatsapp });
+  const app = adminServer.create({ config, db, whatsapp, googleForm });
   const port = config.adminPanel.port || 3000;
   app.listen(port, () => {
     logger.info(`Admin panel listening on :${port}`);
   });
 
-  // Log current state on startup
   const weekStart = currentWeekStart(new Date(), config.timezone);
   const state = db.getState(weekStart);
   logger.info(`Startup: current week ${weekStart}`, state || { note: 'no state yet' });
 
-  // Print group IDs whenever a message arrives from a group.
-  // This is the most reliable way to discover the group ID — just send any
-  // message to your D&D WhatsApp group and the ID will appear in the log.
+  // Print group IDs whenever a message arrives from a group. Send any message
+  // to the D&D WhatsApp group and the ID appears in the log.
   if (config.groupId.startsWith('REPLACE')) {
     logger.info('groupId not set yet — send any message to your D&D group and the ID will appear here.');
-    // message_create fires for ALL messages (incl. ones sent from your own phone)
-    // message only fires for messages received from others
-    // We listen to both to catch every case
     const logGroupMsg = (msg) => {
       if (msg.from && msg.from.endsWith('@g.us')) {
         logger.info(`GROUP ID FOUND  ->  ${msg.from}  (group message body: "${(msg.body || '').slice(0, 40)}")`);

@@ -1,7 +1,7 @@
 {
   "name": "dnd-poll-bot",
   "version": "1.0.0",
-  "description": "WhatsApp bot for weekly D&D session scheduling with native polls and an admin panel.",
+  "description": "WhatsApp bot for weekly D&D session scheduling, backed by a Google Form with an admin panel.",
   "private": true,
   "main": "src/index.js",
   "scripts": {
@@ -17,6 +17,7 @@
     "better-sqlite3": "^11.3.0",
     "express": "^4.21.0",
     "express-session": "^1.18.0",
+    "googleapis": "^144.0.0",
     "luxon": "^3.5.0",
     "node-cron": "^3.0.3",
     "qrcode-terminal": "^0.12.0",

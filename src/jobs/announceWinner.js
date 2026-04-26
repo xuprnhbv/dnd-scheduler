@@ -10,6 +10,16 @@ function renderTemplate(tpl, vars) {
   );
 }
 
+function tallyCounts(playerResponses) {
+  const counts = {};
+  for (const slots of playerResponses) {
+    for (const slot of slots) {
+      counts[slot] = (counts[slot] || 0) + 1;
+    }
+  }
+  return counts;
+}
+
 function findTopOptions(counts) {
   let max = 0;
   for (const v of Object.values(counts)) if (v > max) max = v;
@@ -20,81 +30,85 @@ function findTopOptions(counts) {
   return { max, tied };
 }
 
-/**
- * If a dmNumber is configured, filter `counts` down to only the slots
- * that the DM voted for (i.e. the DM is available for those slots).
- * Returns { effectiveCounts, dmFiltered, dmHadNoSlots }.
- *   dmFiltered   — true if the filter was applied
- *   dmHadNoSlots — true if the DM voted for nothing (or didn't vote at all)
- */
-function applyDmFilter(counts, voters, config) {
-  if (!config.dmNumber) {
-    return { effectiveCounts: counts, dmFiltered: false, dmHadNoSlots: false };
-  }
-
-  const dmNum = String(config.dmNumber).replace(/\D/g, '');
+// Keep only slots the DM said they can play (from the DM-only question).
+// Returns { effectiveCounts, dmHadNoSlots }.
+function applyDmFilter(counts, dmResponse) {
+  const allowed = new Set(dmResponse);
   const effectiveCounts = {};
-
   for (const [slot, count] of Object.entries(counts)) {
-    const slotVoters = voters[slot] || [];
-    if (slotVoters.map((n) => String(n).replace(/\D/g, '')).includes(dmNum)) {
-      effectiveCounts[slot] = count;
-    }
+    if (allowed.has(slot)) effectiveCounts[slot] = count;
   }
-
-  const dmHadNoSlots = Object.keys(effectiveCounts).length === 0;
-  return { effectiveCounts, dmFiltered: true, dmHadNoSlots };
+  return {
+    effectiveCounts,
+    dmHadNoSlots: Object.keys(effectiveCounts).length === 0,
+  };
 }
 
-async function run({ config, db, whatsapp, now = new Date() }) {
+async function run({ config, db, whatsapp, googleForm, now = new Date() }) {
   const weekStart = currentWeekStart(now, config.timezone);
   const state = db.getState(weekStart);
 
   if (!state || !state.mainPollId) {
-    logger.info(`[announceWinner] no main poll for week ${weekStart}; skipping`);
-    return { skipped: true, reason: 'no-poll' };
+    logger.info(`[announceWinner] no form announcement for week ${weekStart}; skipping`);
+    return { skipped: true, reason: 'no-announcement' };
   }
   if (state.winnerAnnounced || state.tiebreakerPollId) {
     logger.info(`[announceWinner] already handled for week ${weekStart}; skipping`);
     return { skipped: true, reason: 'already-handled' };
   }
 
-  const { counts, voters } = await whatsapp.readPollVotes(config.groupId, state.mainPollId);
+  const { playerResponses, dmResponse } = await googleForm.readResponses();
 
-  // --- DM availability filter ---
-  const { effectiveCounts, dmFiltered, dmHadNoSlots } = applyDmFilter(counts, voters, config);
-
-  if (dmFiltered) {
-    if (dmHadNoSlots) {
-      const msg = config.messages.dmUnavailable || '🎲 The DM has no available slots this week — session cancelled.';
-      await whatsapp.sendText(config.groupId, msg);
-      db.setWinner(weekStart, '');
-      logger.info(`[announceWinner] DM (${config.dmNumber}) has no available slots for week ${weekStart}`);
-      return { skipped: false, outcome: 'dm-unavailable' };
-    }
-    const eligible = Object.keys(effectiveCounts).join(', ');
-    logger.info(`[announceWinner] DM filter applied — eligible slots: ${eligible}`);
+  if (!dmResponse) {
+    const dmNoResponseText = config.messages.dmNoResponse
+      || "⏳ The DM hasn't filled the form yet — holding off on picking a slot.";
+    const dmNoResponseMsg = await whatsapp.sendText(config.groupId, dmNoResponseText);
+    await whatsapp.pinMessage(dmNoResponseMsg);
+    logger.info(`[announceWinner] DM has not responded yet for week ${weekStart}; will retry`);
+    return { skipped: false, outcome: 'dm-no-response' };
   }
 
-  const { max, tied } = findTopOptions(effectiveCounts);
+  const counts = tallyCounts(playerResponses);
 
-  if (max === 0) {
-    await whatsapp.sendText(config.groupId, config.messages.noVotes);
+  if (Object.keys(counts).length === 0) {
+    const noRespMsg = await whatsapp.sendText(config.groupId, config.messages.noResponses);
+    await whatsapp.pinMessage(noRespMsg);
     db.setWinner(weekStart, '');
-    logger.info(`[announceWinner] no votes for week ${weekStart}`);
-    return { skipped: false, outcome: 'no-votes' };
+    await googleForm.deleteAllResponses();
+    logger.info(`[announceWinner] no responses for week ${weekStart}`);
+    return { skipped: false, outcome: 'no-responses' };
   }
+
+  const { effectiveCounts, dmHadNoSlots } = applyDmFilter(counts, dmResponse);
+
+  if (dmHadNoSlots) {
+    const dmUnavailText = config.messages.dmUnavailable
+      || '🎲 The DM has no available slots this week — session cancelled.';
+    const dmUnavailMsg = await whatsapp.sendText(config.groupId, dmUnavailText);
+    await whatsapp.pinMessage(dmUnavailMsg);
+    db.setWinner(weekStart, '');
+    await googleForm.deleteAllResponses();
+    logger.info(`[announceWinner] DM has no slots overlapping player picks for week ${weekStart}`);
+    return { skipped: false, outcome: 'dm-unavailable' };
+  }
+
+  const eligible = Object.keys(effectiveCounts).join(', ');
+  logger.info(`[announceWinner] DM filter applied — eligible slots: ${eligible}`);
+
+  const { tied } = findTopOptions(effectiveCounts);
 
   if (tied.length === 1) {
     const winner = tied[0];
     const text = renderTemplate(config.messages.winner, { slot: winner });
-    await whatsapp.sendText(config.groupId, text);
+    const winnerMsg = await whatsapp.sendText(config.groupId, text);
+    await whatsapp.pinMessage(winnerMsg);
     db.setWinner(weekStart, winner);
+    await googleForm.deleteAllResponses();
     logger.info(`[announceWinner] winner: ${winner}`);
     return { skipped: false, outcome: 'winner', winner };
   }
 
-  // Tie — post a tiebreaker poll with only the tied DM-approved options.
+  // Tie — post a tiebreaker WhatsApp poll with only the tied DM-approved options.
   const intro = renderTemplate(config.messages.tiebreakerIntro, {
     slots: tied.join(', '),
   });
@@ -103,6 +117,7 @@ async function run({ config, db, whatsapp, now = new Date() }) {
   const msg = await whatsapp.sendPoll(config.groupId, intro, tied, {
     allowMultipleAnswers: false,
   });
+  await whatsapp.pinMessage(msg);
   const pollId = msg.id && msg.id._serialized ? msg.id._serialized : String(msg.id || '');
   const ts = Math.floor(DateTime.now().setZone(config.timezone).toSeconds());
   db.setTiebreaker(weekStart, pollId, ts);
@@ -111,4 +126,4 @@ async function run({ config, db, whatsapp, now = new Date() }) {
   return { skipped: false, outcome: 'tie', tied, tiebreakerPollId: pollId };
 }
 
-module.exports = { run, findTopOptions };
+module.exports = { run, findTopOptions, tallyCounts, applyDmFilter };
