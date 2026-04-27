@@ -23,6 +23,16 @@
     "passwordHash": "REPLACE_WITH_BCRYPT_HASH",
     "sessionSecret": "REPLACE_WITH_LONG_RANDOM_STRING"
   },
+  "googleCalendar": {
+    "calendarId": "REPLACE_WITH_CALENDAR_ID",
+    "serviceAccountKeyPath": "./service-account.json",
+    "eventTitle": "D&D Session",
+    "eventDurationHours": 5,
+    "slotTimes": {
+      "Slot 1 label": { "dayOfWeek": "thursday", "time": "20:00" },
+      "Slot 2 label": { "dayOfWeek": "friday", "time": "10:00" }
+    }
+  },
   "messages": {
     "formAnnouncement": "D&D form for the week of {weekStart}: {formUrl}",
     "reminder": "Reminder: {filledCount} people filled the form out of {playerCount} players! {formUrl}",

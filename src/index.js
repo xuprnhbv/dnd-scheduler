@@ -7,6 +7,7 @@ const logger = require('./logger');
 const dbLib = require('./db');
 const { createWhatsApp } = require('./whatsapp');
 const { createGoogleForm } = require('./googleform');
+const { createGoogleCalendar } = require('./googlecalendar');
 const scheduler = require('./scheduler');
 const adminServer = require('./admin/server');
 const { currentWeekStart } = require('./slots');
@@ -43,6 +44,18 @@ function loadConfig() {
   if (!cfg.adminPanel.passwordHash || cfg.adminPanel.passwordHash.startsWith('REPLACE')) {
     logger.error('config.adminPanel.passwordHash is not set. Run: node bin/hash-password.js <your-password>');
     process.exit(1);
+  }
+  if (cfg.googleCalendar) {
+    for (const k of ['calendarId', 'serviceAccountKeyPath', 'slotTimes']) {
+      if (cfg.googleCalendar[k] == null || String(cfg.googleCalendar[k]).startsWith('REPLACE')) {
+        logger.error(`config.googleCalendar.${k} is not set (remove the googleCalendar block to disable calendar events)`);
+        process.exit(1);
+      }
+    }
+    if (typeof cfg.googleCalendar.slotTimes !== 'object' || !Object.keys(cfg.googleCalendar.slotTimes).length) {
+      logger.error('config.googleCalendar.slotTimes must be an object mapping slot label → { dayOfWeek, time }');
+      process.exit(1);
+    }
   }
   return cfg;
 }
@@ -83,12 +96,18 @@ async function main() {
   const config = loadConfig();
   const db = dbLib.open();
   const googleForm = createGoogleForm(config.googleForm);
+  const googleCalendar = config.googleCalendar
+    ? createGoogleCalendar(config.googleCalendar)
+    : null;
+  if (googleCalendar) {
+    logger.info(`Google Calendar enabled (calendarId=${googleCalendar.calendarId}, ${googleCalendar.eventDurationHours}h "${googleCalendar.eventTitle}")`);
+  }
 
   const whatsapp = createWhatsApp();
   await whatsapp.init();
   await whatsapp.ensureReady();
 
-  const ctx = { config, db, whatsapp, googleForm };
+  const ctx = { config, db, whatsapp, googleForm, googleCalendar };
 
   if (args.test) {
     try {
@@ -103,7 +122,7 @@ async function main() {
 
   scheduler.start(ctx);
 
-  const app = adminServer.create({ config, db, whatsapp, googleForm });
+  const app = adminServer.create({ config, db, whatsapp, googleForm, googleCalendar });
   const port = config.adminPanel.port || 3000;
   app.listen(port, () => {
     logger.info(`Admin panel listening on :${port}`);
