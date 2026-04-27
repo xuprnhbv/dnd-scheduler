@@ -172,6 +172,52 @@ Open `http://<vps-ip>:3000` → login. The panel shows:
 - Current week: form link sent? responses (X/Y), DM responded?, reminder sent, winner, tiebreaker state
 - "Send form link now" button (only while no link has been posted for the current week)
 
+## Google Calendar integration
+
+When a session winner is announced, the bot can automatically create a Google Calendar event ("D&D Session", 5 hours) and include its link in the WhatsApp message. The feature is **optional** — omit the `googleCalendar` block from `config.json` to keep the bot behaving exactly as before.
+
+**1. Enable the Google Calendar API.**
+
+In the same Google Cloud project you created for the Forms API, enable the **Google Calendar API** as well. No new service account is needed — the same `service-account.json` works.
+
+**2. Share a calendar with the service account.**
+
+In Google Calendar, open the target calendar's settings → **Share with specific people** → add the service account's `client_email` (from `service-account.json`) with **"Make changes to events"** permission. The bot will create events on that calendar.
+
+The `calendarId` in config is the calendar's ID — for a personal calendar it is usually the account email (e.g. `user@gmail.com`). For other calendars, find it under calendar settings → "Integrate calendar".
+
+**3. Add `googleCalendar` to `config.json`.**
+
+```jsonc
+"googleCalendar": {
+  "calendarId": "user@gmail.com",
+  "serviceAccountKeyPath": "./service-account.json",
+  "eventTitle": "D&D Session",
+  "eventDurationHours": 5,
+
+  // Map each slot label (must exactly match the values in
+  // googleForm.playerSlotQuestions) to the day-of-week and start time.
+  "slotTimes": {
+    "Thu evening": { "dayOfWeek": "thursday", "time": "20:00" },
+    "Fri morning": { "dayOfWeek": "friday",   "time": "10:00" },
+    "Fri evening": { "dayOfWeek": "friday",   "time": "20:00" },
+    "Sat morning": { "dayOfWeek": "saturday", "time": "10:00" },
+    "Sat evening": { "dayOfWeek": "saturday", "time": "20:00" }
+  }
+}
+```
+
+`time` is `"HH:mm"` in 24-hour format in `config.timezone`. `dayOfWeek` is a lowercase English day name.
+
+**Calendar link in messages.**
+
+Once the winner is determined the bot creates the event and includes the link in the WhatsApp announcement:
+
+- If your `winner` / `tiebreakerWinner` message template contains the `{calendarLink}` placeholder, the URL is substituted in place.
+- If not, the link is appended automatically on a new line: `📅 <url>`.
+
+If event creation fails for any reason (API error, unmapped slot label), the WhatsApp announcement still goes out — calendar integration is non-blocking and non-fatal.
+
 ## Test mode
 
 Run any job immediately, regardless of the cron schedule:
@@ -311,4 +357,4 @@ Covers week boundaries, vote tallying, and the DM availability filter.
 
 ## Out of scope
 
-Multi-group support, editing the form via the panel, multi-user admin, HTTPS inside the app (use Caddy), analytics, calendar integration, responder-identity tracking.
+Multi-group support, editing the form via the panel, multi-user admin, HTTPS inside the app (use Caddy), analytics, responder-identity tracking.

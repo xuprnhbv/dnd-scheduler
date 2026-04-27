@@ -10,6 +10,12 @@ function renderTemplate(tpl, vars) {
   );
 }
 
+function appendCalendarLink(text, link) {
+  if (!link) return text;
+  if (text.includes('{calendarLink}')) return text.replace('{calendarLink}', link);
+  return `${text}\n📅 ${link}`;
+}
+
 function tallyCounts(playerResponses) {
   const counts = {};
   for (const slots of playerResponses) {
@@ -44,7 +50,7 @@ function applyDmFilter(counts, dmResponse) {
   };
 }
 
-async function run({ config, db, whatsapp, googleForm, now = new Date() }) {
+async function run({ config, db, whatsapp, googleForm, googleCalendar, now = new Date() }) {
   const weekStart = currentWeekStart(now, config.timezone);
   const state = db.getState(weekStart);
 
@@ -99,10 +105,24 @@ async function run({ config, db, whatsapp, googleForm, now = new Date() }) {
 
   if (tied.length === 1) {
     const winner = tied[0];
-    const text = renderTemplate(config.messages.winner, { slot: winner });
+    db.setWinner(weekStart, winner);
+
+    let calendarLink = null;
+    if (googleCalendar) {
+      const cal = await googleCalendar.createSessionEvent({ weekStart, slotLabel: winner, timezone: config.timezone });
+      if (cal.ok) {
+        calendarLink = cal.htmlLink;
+        db.setCalendarEventLink(weekStart, calendarLink);
+        logger.info(`[announceWinner] calendar event created: ${calendarLink}`);
+      } else {
+        logger.warn(`[announceWinner] calendar event skipped: ${cal.reason}`);
+      }
+    }
+
+    const raw = renderTemplate(config.messages.winner, { slot: winner, calendarLink: calendarLink || '' });
+    const text = appendCalendarLink(raw, calendarLink);
     const winnerMsg = await whatsapp.sendText(config.groupId, text);
     await whatsapp.pinMessage(winnerMsg);
-    db.setWinner(weekStart, winner);
     await googleForm.deleteAllResponses();
     logger.info(`[announceWinner] winner: ${winner}`);
     return { skipped: false, outcome: 'winner', winner };

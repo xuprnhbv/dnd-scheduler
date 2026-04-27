@@ -21,9 +21,9 @@ function wrap(name, fn) {
   };
 }
 
-function start({ config, db, whatsapp, googleForm }) {
+function start({ config, db, whatsapp, googleForm, googleCalendar }) {
   const tz = config.timezone;
-  const ctx = { config, db, whatsapp, googleForm };
+  const ctx = { config, db, whatsapp, googleForm, googleCalendar };
 
   // Sunday 10:00 — announce the form link in the group
   cron.schedule('0 10 * * 0', wrap('postFormLink', () => postFormLink.run(ctx)), { timezone: tz });

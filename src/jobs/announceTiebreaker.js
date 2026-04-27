@@ -10,7 +10,13 @@ function renderTemplate(tpl, vars) {
   );
 }
 
-async function run({ config, db, whatsapp, googleForm, now = new Date() }) {
+function appendCalendarLink(text, link) {
+  if (!link) return text;
+  if (text.includes('{calendarLink}')) return text.replace('{calendarLink}', link);
+  return `${text}\n📅 ${link}`;
+}
+
+async function run({ config, db, whatsapp, googleForm, googleCalendar, now = new Date() }) {
   const weekStart = currentWeekStart(now, config.timezone);
   const state = db.getState(weekStart);
 
@@ -37,10 +43,24 @@ async function run({ config, db, whatsapp, googleForm, now = new Date() }) {
     winner = tied[0];
   }
 
-  const text = renderTemplate(config.messages.tiebreakerWinner, { slot: winner });
+  db.setTiebreakerWinner(weekStart, winner);
+
+  let calendarLink = null;
+  if (googleCalendar) {
+    const cal = await googleCalendar.createSessionEvent({ weekStart, slotLabel: winner, timezone: config.timezone });
+    if (cal.ok) {
+      calendarLink = cal.htmlLink;
+      db.setCalendarEventLink(weekStart, calendarLink);
+      logger.info(`[announceTiebreaker] calendar event created: ${calendarLink}`);
+    } else {
+      logger.warn(`[announceTiebreaker] calendar event skipped: ${cal.reason}`);
+    }
+  }
+
+  const raw = renderTemplate(config.messages.tiebreakerWinner, { slot: winner, calendarLink: calendarLink || '' });
+  const text = appendCalendarLink(raw, calendarLink);
   const winnerMsg = await whatsapp.sendText(config.groupId, text);
   await whatsapp.pinMessage(winnerMsg);
-  db.setTiebreakerWinner(weekStart, winner);
 
   if (googleForm && typeof googleForm.deleteAllResponses === 'function') {
     await googleForm.deleteAllResponses();
