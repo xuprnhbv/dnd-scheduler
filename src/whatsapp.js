@@ -69,7 +69,7 @@ function numberFromContactId(id) {
   return String(id).split('@')[0];
 }
 
-function createWhatsApp() {
+function createWhatsApp(db = null) {
   let client = null;
   let ready = false;
   let readyResolvers = [];
@@ -184,15 +184,38 @@ function createWhatsApp() {
 
   // Pin a message for the given duration (default 7 days).
   // WhatsApp only accepts three durations: 86400 (24h), 604800 (7d), 2592000 (30d).
-  // Non-fatal: logs a warning if pinning fails (e.g. bot is not a group admin).
+  // Before pinning, unpins any messages previously pinned by the bot in the same chat.
+  // Non-fatal: logs a warning if pinning/unpinning fails (e.g. bot is not a group admin).
   async function pinMessage(msg, durationSecs = 604800) {
     if (!msg || typeof msg.pin !== 'function') {
       logger.warn('[pinMessage] message does not support pin(); skipping');
       return;
     }
+
+    const chatId = msg.id && msg.id.remote;
+
+    if (db && chatId) {
+      const prevIds = db.getBotPinnedMessages(chatId);
+      for (const prevId of prevIds) {
+        try {
+          const prevMsg = await getMessageById(chatId, prevId);
+          if (prevMsg && typeof prevMsg.unpin === 'function') {
+            await prevMsg.unpin();
+            logger.info('[pinMessage] unpinned previous bot-pinned message', prevId);
+          }
+        } catch (err) {
+          logger.warn('[pinMessage] could not unpin previous message', prevId, ':', err.message);
+        }
+        db.removeBotPinnedMessage(chatId, prevId);
+      }
+    }
+
     try {
       await msg.pin(durationSecs);
       logger.info('[pinMessage] message pinned for', durationSecs, 'seconds');
+      if (db && chatId && msg.id._serialized) {
+        db.addBotPinnedMessage(chatId, msg.id._serialized);
+      }
     } catch (err) {
       logger.warn('[pinMessage] could not pin message (bot may not be a group admin):', err.message);
     }

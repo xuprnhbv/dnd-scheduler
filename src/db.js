@@ -29,6 +29,12 @@ function migrate(db) {
     );
 
     DROP TABLE IF EXISTS weekly_slots;
+
+    CREATE TABLE IF NOT EXISTS bot_pinned_messages (
+      chat_id TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      PRIMARY KEY (chat_id, message_id)
+    );
   `);
   try {
     db.exec('ALTER TABLE poll_state ADD COLUMN calendar_event_link TEXT');
@@ -59,6 +65,15 @@ function wrap(db) {
     getState: db.prepare('SELECT * FROM poll_state WHERE week_start = ?'),
     insertState: db.prepare(
       'INSERT OR IGNORE INTO poll_state (week_start) VALUES (?)',
+    ),
+    addBotPinned: db.prepare(
+      'INSERT OR IGNORE INTO bot_pinned_messages (chat_id, message_id) VALUES (?, ?)',
+    ),
+    getBotPinned: db.prepare(
+      'SELECT message_id FROM bot_pinned_messages WHERE chat_id = ?',
+    ),
+    removeBotPinned: db.prepare(
+      'DELETE FROM bot_pinned_messages WHERE chat_id = ? AND message_id = ?',
     ),
     setMainPoll: db.prepare(
       'UPDATE poll_state SET main_poll_id = ?, main_poll_timestamp = ? WHERE week_start = ?',
@@ -120,6 +135,18 @@ function wrap(db) {
     stmts.setCalendarEventLink.run(link, weekStart);
   }
 
+  function addBotPinnedMessage(chatId, messageId) {
+    stmts.addBotPinned.run(chatId, messageId);
+  }
+
+  function getBotPinnedMessages(chatId) {
+    return stmts.getBotPinned.all(chatId).map((r) => r.message_id);
+  }
+
+  function removeBotPinnedMessage(chatId, messageId) {
+    stmts.removeBotPinned.run(chatId, messageId);
+  }
+
   function recentStates(limit = 10) {
     return stmts.allStates.all(limit).map(rowToState);
   }
@@ -138,6 +165,9 @@ function wrap(db) {
     setTiebreaker,
     setTiebreakerWinner,
     setCalendarEventLink,
+    addBotPinnedMessage,
+    getBotPinnedMessages,
+    removeBotPinnedMessage,
     recentStates,
     close,
   };

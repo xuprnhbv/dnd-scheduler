@@ -103,7 +103,7 @@ async function main() {
     logger.info(`Google Calendar enabled (calendarId=${googleCalendar.calendarId}, ${googleCalendar.eventDurationHours}h "${googleCalendar.eventTitle}")`);
   }
 
-  const whatsapp = createWhatsApp();
+  const whatsapp = createWhatsApp(db);
   await whatsapp.init();
   await whatsapp.ensureReady();
 
