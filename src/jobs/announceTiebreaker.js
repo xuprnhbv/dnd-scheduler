@@ -62,10 +62,6 @@ async function run({ config, db, whatsapp, googleForm, googleCalendar, now = new
   const winnerMsg = await whatsapp.sendText(config.groupId, text);
   await whatsapp.pinMessage(winnerMsg);
 
-  if (googleForm && typeof googleForm.deleteAllResponses === 'function') {
-    await googleForm.deleteAllResponses();
-  }
-
   logger.info(`[announceTiebreaker] tiebreaker winner: ${winner}`);
   return { skipped: false, winner };
 }

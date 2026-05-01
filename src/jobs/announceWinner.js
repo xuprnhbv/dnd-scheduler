@@ -80,7 +80,6 @@ async function run({ config, db, whatsapp, googleForm, googleCalendar, now = new
     const noRespMsg = await whatsapp.sendText(config.groupId, config.messages.noResponses);
     await whatsapp.pinMessage(noRespMsg);
     db.setWinner(weekStart, '');
-    await googleForm.deleteAllResponses();
     logger.info(`[announceWinner] no responses for week ${weekStart}`);
     return { skipped: false, outcome: 'no-responses' };
   }
@@ -93,7 +92,6 @@ async function run({ config, db, whatsapp, googleForm, googleCalendar, now = new
     const dmUnavailMsg = await whatsapp.sendText(config.groupId, dmUnavailText);
     await whatsapp.pinMessage(dmUnavailMsg);
     db.setWinner(weekStart, '');
-    await googleForm.deleteAllResponses();
     logger.info(`[announceWinner] DM has no slots overlapping player picks for week ${weekStart}`);
     return { skipped: false, outcome: 'dm-unavailable' };
   }
@@ -123,7 +121,6 @@ async function run({ config, db, whatsapp, googleForm, googleCalendar, now = new
     const text = appendCalendarLink(raw, calendarLink);
     const winnerMsg = await whatsapp.sendText(config.groupId, text);
     await whatsapp.pinMessage(winnerMsg);
-    await googleForm.deleteAllResponses();
     logger.info(`[announceWinner] winner: ${winner}`);
     return { skipped: false, outcome: 'winner', winner };
   }
