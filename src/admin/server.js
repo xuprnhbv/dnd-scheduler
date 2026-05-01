@@ -252,8 +252,9 @@ function create({ config, db, whatsapp, googleForm }) {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', 1);
-  // extended:true is required to parse bracket-notation slot map fields
-  app.use(express.urlencoded({ extended: true }));
+  // extended:false uses querystring (not qs), which keeps bracket-notation keys literal —
+  // that's what flattenForm expects when reading slot-map row fields.
+  app.use(express.urlencoded({ extended: false }));
   app.use(express.json({ limit: '64kb' }));
   app.use(sessionMiddleware(config));
 
