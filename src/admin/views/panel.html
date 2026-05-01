@@ -30,7 +30,10 @@
   <div class="container">
     <header>
       <h1>D&amp;D Bot Admin</h1>
-      <form method="post" action="/logout"><button class="btn secondary" type="submit">Logout</button></form>
+      <div style="display:flex;gap:8px;align-items:center">
+        <a href="/config" class="btn secondary" style="text-decoration:none">⚙️ Edit config</a>
+        <form method="post" action="/logout"><button class="btn secondary" type="submit">Logout</button></form>
+      </div>
     </header>
 
     {{BANNER}}
