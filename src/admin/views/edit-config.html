@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Edit Config — D&amp;D Bot Admin</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; background: #0f0f10; color: #eee; margin: 0; padding: 20px; }
+    .container { max-width: 860px; margin: 0 auto; }
+    h1 { font-size: 22px; margin: 0 0 18px; }
+    h2 { font-size: 16px; margin: 0 0 12px; color: #ccc; }
+    h3 { font-size: 14px; margin: 18px 0 8px; color: #aaa; border-top: 1px solid #26262a; padding-top: 14px; }
+    .card { background: #1a1a1c; border: 1px solid #26262a; border-radius: 8px; padding: 16px 18px; margin-bottom: 16px; }
+    .banner { padding: 10px 14px; border-radius: 6px; margin-bottom: 16px; }
+    .banner.success { background: #1b3a1b; border: 1px solid #2d5a2d; color: #cfe9cf; }
+    .banner.error   { background: #3a1b1b; border: 1px solid #5a2d2d; color: #f8caca; }
+    .banner pre { margin: 6px 0 0; font-size: 12px; white-space: pre-wrap; word-break: break-all; background: rgba(0,0,0,.25); padding: 8px; border-radius: 4px; }
+    .btn { padding: 8px 14px; background: #b00; color: #fff; border: 0; border-radius: 6px; cursor: pointer; font-size: 14px; }
+    .btn:hover { background: #d00; }
+    .btn.secondary { background: #333; }
+    .btn.secondary:hover { background: #444; }
+    .btn.small { padding: 4px 9px; font-size: 12px; }
+    .btn.warn { background: #664400; }
+    .btn.warn:hover { background: #885500; }
+    a { color: #8ac; }
+    header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+    header form { margin: 0; }
+    nav { font-size: 13px; color: #888; margin-bottom: 18px; }
+    nav a { color: #8ac; }
+
+    /* Field rows */
+    .field { display: grid; grid-template-columns: 200px 1fr; gap: 6px 14px; margin-bottom: 14px; align-items: start; }
+    .field label { font-size: 14px; color: #ccc; padding-top: 7px; }
+    .field .help  { font-size: 12px; color: #666; margin-top: 3px; }
+    .field .err   { font-size: 12px; color: #f88; margin-top: 3px; }
+    input[type=text], input[type=number], input[type=url], input[type=password], textarea, select {
+      width: 100%; background: #111; border: 1px solid #333; border-radius: 5px;
+      color: #eee; font-size: 13px; padding: 6px 9px; outline: none;
+    }
+    input:focus, textarea:focus, select:focus { border-color: #555; }
+    input.err-field, textarea.err-field, select.err-field { border-color: #a44; }
+    textarea { resize: vertical; min-height: 68px; font-family: monospace; }
+    .pw-wrap { display: flex; gap: 6px; align-items: center; }
+    .pw-wrap input { flex: 1; }
+
+    /* Slot map tables */
+    .slot-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .slot-table th { text-align: left; color: #888; font-weight: normal; font-size: 12px; padding: 0 0 4px; }
+    .slot-table td { padding: 3px 4px 3px 0; }
+    .slot-table td:last-child { width: 36px; }
+    .slot-table input { padding: 5px 7px; }
+    .add-row-btn { margin-top: 6px; }
+
+    /* Sections bottom bar */
+    .save-bar { display: flex; gap: 10px; align-items: center; margin-top: 4px; }
+
+    /* Restart banner content */
+    .restart-cmds code { display: block; background: #111; border: 1px solid #333; border-radius: 4px; padding: 7px 10px; font-size: 12px; margin: 4px 0; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Edit Config</h1>
+      <form method="post" action="/logout"><button class="btn secondary" type="submit">Logout</button></form>
+    </header>
+    <nav><a href="/">← Back to dashboard</a></nav>
+
+    {{BANNER}}
+
+    <form method="post" action="/config" id="cfg-form">
+      {{FIELDS_HTML}}
+
+      <div class="save-bar">
+        <button type="submit" class="btn">Save changes</button>
+        <a href="/" class="btn secondary" style="text-decoration:none;display:inline-block">Cancel</a>
+      </div>
+    </form>
+
+    <!-- Change password sub-form -->
+    <div class="card" style="margin-top:20px">
+      <h2>Change admin password</h2>
+      <p style="font-size:13px;color:#888;margin:0 0 12px">
+        Enter a new password. The bcrypt hash will be saved immediately — no need to restart.
+      </p>
+      {{CHANGE_PW_BANNER}}
+      <form method="post" action="/config/change-password">
+        <div class="field">
+          <label for="new_password">New password</label>
+          <div>
+            <div class="pw-wrap">
+              <input type="password" id="new_password" name="new_password" autocomplete="new-password" required minlength="8" />
+              <button type="button" class="btn secondary small" onclick="togglePw('new_password',this)">Show</button>
+            </div>
+          </div>
+        </div>
+        <button type="submit" class="btn secondary">Update password</button>
+      </form>
+    </div>
+
+    <!-- Regenerate session secret sub-form -->
+    <div class="card" style="margin-top:16px">
+      <h2>Regenerate session secret</h2>
+      <p style="font-size:13px;color:#888;margin:0 0 12px">
+        ⚠️ This will <strong>log everyone out</strong> of the admin panel immediately (all sessions are invalidated).
+      </p>
+      {{REGEN_BANNER}}
+      <form method="post" action="/config/regenerate-secret"
+            onsubmit="return confirm('Regenerate the session secret? This will log you out.')">
+        <button type="submit" class="btn warn">Regenerate secret &amp; log out</button>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    function togglePw(id, btn) {
+      const inp = document.getElementById(id);
+      if (!inp) return;
+      if (inp.type === 'password') { inp.type = 'text'; btn.textContent = 'Hide'; }
+      else                          { inp.type = 'password'; btn.textContent = 'Show'; }
+    }
+
+    function addSlotMapRow(baseName, keyPh, valPh) {
+      const tbody = document.getElementById('tbody-' + baseName);
+      const idx = tbody.querySelectorAll('tr').length;
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td><input type="text" name="' + baseName + '[' + idx + '][questionId]" placeholder="' + keyPh + '" /></td>' +
+        '<td><input type="text" name="' + baseName + '[' + idx + '][slotLabel]" placeholder="' + valPh + '" /></td>' +
+        '<td><button type="button" class="btn secondary small" onclick="removeRow(this)">−</button></td>';
+      tbody.appendChild(tr);
+    }
+
+    function addSlotTimesRow(baseName, keyPh) {
+      const tbody = document.getElementById('tbody-' + baseName);
+      const idx = tbody.querySelectorAll('tr').length;
+      const days = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+      const opts = days.map(d => '<option value="' + d + '">' + d.charAt(0).toUpperCase() + d.slice(1) + '</option>').join('');
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td><input type="text" name="' + baseName + '[' + idx + '][slotLabel]" placeholder="' + keyPh + '" /></td>' +
+        '<td><select name="' + baseName + '[' + idx + '][dayOfWeek]">' + opts + '</select></td>' +
+        '<td><input type="text" name="' + baseName + '[' + idx + '][time]" placeholder="20:00" style="width:80px" /></td>' +
+        '<td><button type="button" class="btn secondary small" onclick="removeRow(this)">−</button></td>';
+      tbody.appendChild(tr);
+    }
+
+    function removeRow(btn) {
+      const tr = btn.closest('tr');
+      const tbody = tr.parentNode;
+      tr.remove();
+      // Re-index remaining rows so names stay sequential
+      Array.from(tbody.querySelectorAll('tr')).forEach(function(row, i) {
+        row.querySelectorAll('input, select').forEach(function(el) {
+          el.name = el.name.replace(/\[\d+\]/, '[' + i + ']');
+        });
+      });
+    }
+  </script>
+</body>
+</html>

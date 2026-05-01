@@ -13,6 +13,7 @@ const adminServer = require('./admin/server');
 const { currentWeekStart } = require('./slots');
 
 const CONFIG_PATH = path.resolve(process.cwd(), 'config.json');
+const { validateRuntimeConfig } = require('./admin/configIO');
 
 function loadConfig() {
   if (!fs.existsSync(CONFIG_PATH)) {
@@ -21,41 +22,10 @@ function loadConfig() {
   }
   const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
   const cfg = JSON.parse(raw);
-  const missing = [];
-  for (const k of ['timezone', 'groupId', 'playerCount', 'googleForm', 'adminPanel', 'messages']) {
-    if (cfg[k] == null) missing.push(k);
-  }
-  if (missing.length) {
-    logger.error(`config.json missing fields: ${missing.join(', ')}`);
+  const { ok, errors } = validateRuntimeConfig(cfg);
+  if (!ok) {
+    for (const e of errors) logger.error(e);
     process.exit(1);
-  }
-  for (const k of ['formId', 'publicUrl', 'serviceAccountKeyPath']) {
-    if (!cfg.googleForm[k] || String(cfg.googleForm[k]).startsWith('REPLACE')) {
-      logger.error(`config.googleForm.${k} is not set`);
-      process.exit(1);
-    }
-  }
-  for (const k of ['playerSlotQuestions', 'dmSlotQuestions']) {
-    if (!cfg.googleForm[k] || typeof cfg.googleForm[k] !== 'object' || !Object.keys(cfg.googleForm[k]).length) {
-      logger.error(`config.googleForm.${k} must be an object mapping questionId → slot label`);
-      process.exit(1);
-    }
-  }
-  if (!cfg.adminPanel.passwordHash || cfg.adminPanel.passwordHash.startsWith('REPLACE')) {
-    logger.error('config.adminPanel.passwordHash is not set. Run: node bin/hash-password.js <your-password>');
-    process.exit(1);
-  }
-  if (cfg.googleCalendar) {
-    for (const k of ['calendarId', 'serviceAccountKeyPath', 'slotTimes']) {
-      if (cfg.googleCalendar[k] == null || String(cfg.googleCalendar[k]).startsWith('REPLACE')) {
-        logger.error(`config.googleCalendar.${k} is not set (remove the googleCalendar block to disable calendar events)`);
-        process.exit(1);
-      }
-    }
-    if (typeof cfg.googleCalendar.slotTimes !== 'object' || !Object.keys(cfg.googleCalendar.slotTimes).length) {
-      logger.error('config.googleCalendar.slotTimes must be an object mapping slot label → { dayOfWeek, time }');
-      process.exit(1);
-    }
   }
   return cfg;
 }
