@@ -10,7 +10,7 @@ function renderTemplate(tpl, vars) {
   );
 }
 
-async function run({ config, db, whatsapp, now = new Date() }) {
+async function run({ config, db, whatsapp, googleForm, now = new Date() }) {
   const tz = config.timezone;
   const weekStart = currentWeekStart(now, tz);
   const state = db.ensureState(weekStart);
@@ -18,6 +18,10 @@ async function run({ config, db, whatsapp, now = new Date() }) {
   if (state.mainPollId) {
     logger.info(`[postFormLink] week ${weekStart} already announced (${state.mainPollId}); skipping`);
     return { skipped: true, weekStart };
+  }
+
+  if (googleForm) {
+    await googleForm.deleteAllResponses();
   }
 
   const text = renderTemplate(config.messages.formAnnouncement, {
