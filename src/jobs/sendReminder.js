@@ -22,7 +22,7 @@ async function run({ config, db, whatsapp, googleForm, now = new Date() }) {
     return { skipped: true, reason: 'already-sent' };
   }
 
-  const { playerResponses } = await googleForm.readResponses();
+  const { playerResponses, dmResponse } = await googleForm.readResponses();
   const filledCount = playerResponses.length;
   const playerCount = Number(config.playerCount) || 0;
 
@@ -32,11 +32,17 @@ async function run({ config, db, whatsapp, googleForm, now = new Date() }) {
     return { skipped: true, reason: 'all-filled', filledCount, playerCount };
   }
 
-  const text = renderTemplate(config.messages.reminder, {
+  let text = renderTemplate(config.messages.reminder, {
     filledCount,
     playerCount,
     formUrl: config.googleForm.publicUrl,
   });
+
+  if (!dmResponse && config.messages.dmNoResponse) {
+    text += '\n\n' + renderTemplate(config.messages.dmNoResponse, {
+      formUrl: config.googleForm.publicUrl,
+    });
+  }
   const msg = await whatsapp.sendText(config.groupId, text);
   await whatsapp.pinMessage(msg);
   db.setReminderSent(weekStart);
