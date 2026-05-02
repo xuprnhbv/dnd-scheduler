@@ -2,7 +2,23 @@
 
 const { DateTime } = require('luxon');
 const { currentWeekStart } = require('../slots');
+const { resolveSlotRange } = require('../sessionTime');
 const logger = require('../logger');
+
+const EVENT_TITLE_FORMAT = 'ccc, LLL d';
+
+async function sendSessionAnnouncement({ whatsapp, config, weekStart, slotLabel, text }) {
+  const range = resolveSlotRange({ weekStart, slotLabel, config });
+  if (!range) {
+    logger.warn('[announceWinner] slot times not configured; falling back to text announcement');
+    return whatsapp.sendText(config.groupId, text);
+  }
+  const title = `\u{1F3B2} D&D Session - ${range.start.toFormat(EVENT_TITLE_FORMAT)}`;
+  return whatsapp.sendEvent(config.groupId, title, range.start.toJSDate(), {
+    endTime: range.end.toJSDate(),
+    description: text,
+  });
+}
 
 function renderTemplate(tpl, vars) {
   return tpl.replace(/\{(\w+)\}/g, (_m, k) =>
@@ -119,7 +135,9 @@ async function run({ config, db, whatsapp, googleForm, googleCalendar, now = new
 
     const raw = renderTemplate(config.messages.winner, { slot: winner, calendarLink: calendarLink || '' });
     const text = appendCalendarLink(raw, calendarLink);
-    const winnerMsg = await whatsapp.sendText(config.groupId, text);
+    const winnerMsg = await sendSessionAnnouncement({
+      whatsapp, config, weekStart, slotLabel: winner, text,
+    });
     await whatsapp.pinMessage(winnerMsg);
     logger.info(`[announceWinner] winner: ${winner}`);
     return { skipped: false, outcome: 'winner', winner };
@@ -143,4 +161,4 @@ async function run({ config, db, whatsapp, googleForm, googleCalendar, now = new
   return { skipped: false, outcome: 'tie', tied, tiebreakerPollId: pollId };
 }
 
-module.exports = { run, findTopOptions, tallyCounts, applyDmFilter };
+module.exports = { run, findTopOptions, tallyCounts, applyDmFilter, sendSessionAnnouncement };

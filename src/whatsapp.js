@@ -1,7 +1,7 @@
 'use strict';
 
 const fs = require('fs');
-const { Client, LocalAuth, Poll } = require('whatsapp-web.js');
+const { Client, LocalAuth, Poll, ScheduledEvent } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const logger = require('./logger');
 
@@ -182,6 +182,16 @@ function createWhatsApp(db = null) {
     return msg;
   }
 
+  async function sendEvent(chatId, name, startTime, { endTime, description } = {}) {
+    await ensureReady();
+    const event = new ScheduledEvent(name, startTime, {
+      endTime,
+      description,
+      callType: 'none',
+    });
+    return client.sendMessage(chatId, event);
+  }
+
   // Pin a message for the given duration (default 7 days).
   // WhatsApp only accepts three durations: 86400 (24h), 604800 (7d), 2592000 (30d).
   // Before pinning, unpins any messages previously pinned by the bot in the same chat.
@@ -322,6 +332,7 @@ function createWhatsApp(db = null) {
     waitForReady,
     sendText,
     sendPoll,
+    sendEvent,
     pinMessage,
     getMessageById,
     readPollVotes,

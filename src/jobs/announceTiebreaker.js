@@ -1,7 +1,7 @@
 'use strict';
 
 const { currentWeekStart } = require('../slots');
-const { findTopOptions } = require('./announceWinner');
+const { findTopOptions, sendSessionAnnouncement } = require('./announceWinner');
 const logger = require('../logger');
 
 function renderTemplate(tpl, vars) {
@@ -59,7 +59,9 @@ async function run({ config, db, whatsapp, googleForm, googleCalendar, now = new
 
   const raw = renderTemplate(config.messages.tiebreakerWinner, { slot: winner, calendarLink: calendarLink || '' });
   const text = appendCalendarLink(raw, calendarLink);
-  const winnerMsg = await whatsapp.sendText(config.groupId, text);
+  const winnerMsg = await sendSessionAnnouncement({
+    whatsapp, config, weekStart, slotLabel: winner, text,
+  });
   await whatsapp.pinMessage(winnerMsg);
 
   logger.info(`[announceTiebreaker] tiebreaker winner: ${winner}`);
