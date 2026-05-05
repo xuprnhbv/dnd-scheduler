@@ -119,7 +119,7 @@ async function main() {
     logger.info('SIGTERM received, shutting down');
     await whatsapp.destroy();
     db.close();
-    process.exit(0);
+    process.exit(process.env.DND_RESTART_REQUESTED ? 1 : 0);
   });
   process.on('SIGINT', async () => {
     logger.info('SIGINT received, shutting down');
