@@ -236,15 +236,40 @@ async function renderPanel({ config, db, googleForm, banner = '', now = new Date
 
 // ─── Restart banner ───────────────────────────────────────────────────────────
 
-const RESTART_BANNER = `<div class="banner success">
-  ✅ Config saved. <strong>Restart the bot for changes to take effect.</strong>
-  <div class="restart-cmds" style="margin-top:8px">
-    <div style="font-size:12px;color:#aaa;margin-bottom:4px">tmux:</div>
-    <code>tmux send-keys -t dnd-bot C-c Enter &amp;&amp; tmux send-keys -t dnd-bot 'node src/index.js' Enter</code>
-    <div style="font-size:12px;color:#aaa;margin:6px 0 4px">systemd:</div>
-    <code>sudo systemctl restart dnd-bot</code>
+const RESTART_BANNER = `<div class="banner success" id="restart-banner">
+  ✅ Config saved.
+  <form method="post" action="/restart" style="display:inline;margin-left:8px"
+        onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='Restarting…';">
+    <button type="submit" class="btn">🔄 Restart bot to apply changes</button>
+  </form>
+  <div style="font-size:12px;color:#aaa;margin-top:6px">
+    The panel will be unreachable for ~5–10s while the bot restarts.
   </div>
 </div>`;
+
+function triggerRestart() {
+  process.env.DND_RESTART_REQUESTED = '1';
+  const underSystemd = !!(process.env.INVOCATION_ID || process.env.JOURNAL_STREAM);
+
+  if (underSystemd) {
+    logger.info('[admin] restart: detected systemd, exiting with code 1');
+    process.kill(process.pid, 'SIGTERM');
+    setTimeout(() => process.exit(1), 8000).unref();
+  } else {
+    logger.info('[admin] restart: no systemd detected, spawning detached child');
+    const { spawn } = require('child_process');
+    const path = require('path');
+    const child = spawn(process.execPath, [path.resolve(__dirname, '../index.js')], {
+      detached: true,
+      stdio: 'ignore',
+      cwd: path.resolve(__dirname, '../..'),
+      env: process.env,
+    });
+    child.unref();
+    setTimeout(() => process.kill(process.pid, 'SIGTERM'), 500);
+    setTimeout(() => process.exit(0), 8000).unref();
+  }
+}
 
 // ─── App factory ──────────────────────────────────────────────────────────────
 
@@ -367,6 +392,19 @@ function create({ config, db, whatsapp, googleForm }) {
       logger.error('config POST error:', err);
       res.status(500).type('text/plain').send('Internal error: ' + escapeHtml(err.message));
     }
+  });
+
+  // ── Restart ────────────────────────────────────────────────────────────────
+
+  app.post('/restart', requireAuth, (req, res) => {
+    logger.info(`[admin] restart requested from ${req.ip}`);
+    res.type('text/html').send(`<!doctype html>
+<meta http-equiv="refresh" content="8;url=/config">
+<body style="font-family:sans-serif;padding:24px">
+  <h2>🔄 Restarting bot…</h2>
+  <p>This page will reload in ~8 seconds. If it doesn't, <a href="/config">click here</a>.</p>
+</body>`);
+    setTimeout(() => triggerRestart(), 250);
   });
 
   // ── Change password ────────────────────────────────────────────────────────
