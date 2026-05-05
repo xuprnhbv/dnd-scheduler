@@ -152,7 +152,7 @@ Leave `config.groupId` as-is on the first run — the bot will log the group ID 
 }
 ```
 
-After editing `config.json` while the bot is running, restart it for changes to take effect (`systemctl restart dnd-bot`).
+After editing `config.json` while the bot is running, use the **Restart bot** button in the admin panel (`/config`) to apply changes, or kill and re-launch the process manually.
 
 ## First run
 
@@ -231,13 +231,14 @@ node src/index.js --test announce-tiebreaker
 
 The bot starts up (you'll need the QR on first ever run), runs the job once, then exits.
 
-**If the bot is already running as a systemd service, stop it first** — only one instance can hold the WhatsApp session and bind to the admin panel port at a time:
+**If the bot is already running, stop it first** — only one instance can hold the WhatsApp session and bind to the admin panel port at a time:
 
 ```sh
-sudo systemctl stop dnd-bot
+kill $(ps aux | grep 'node src/index' | grep -v grep | awk '{print $2}')
 node src/index.js --test post-form-link
-sudo systemctl start dnd-bot
 ```
+
+Then restart the bot normally when done (see [Running the bot](#running-the-bot)).
 
 Each job is also idempotent per-week — `post-form-link` won't re-post if the week already has an announcement on record. To force a re-run for the current week, delete that week's row from the DB:
 
@@ -245,37 +246,29 @@ Each job is also idempotent per-week — `post-form-link` won't re-post if the w
 node -e "const db = require('./src/db').open(); db.db.prepare(\"DELETE FROM weekly_state WHERE week_start = '2026-04-19'\").run(); db.close()"
 ```
 
-## Run as a systemd service
+## Running the bot
 
-Create `/etc/systemd/system/dnd-bot.service`:
-
-```ini
-[Unit]
-Description=D&D Weekly Scheduling Bot
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=dnd
-WorkingDirectory=/home/dnd/dnd-bot
-ExecStart=/usr/bin/node src/index.js
-Restart=on-failure
-RestartSec=10
-Environment=NODE_ENV=production
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Enable and start:
+Start the bot in the background with `nohup`, appending logs to `/tmp/bot.log`:
 
 ```sh
-sudo systemctl daemon-reload
-sudo systemctl enable dnd-bot
-sudo systemctl start dnd-bot
-sudo journalctl -u dnd-bot -f
+cd /opt/dnd-poll-bot
+nohup node src/index.js >> /tmp/bot.log 2>&1 &
+echo "Started PID $!"
 ```
+
+Follow logs:
+
+```sh
+tail -f /tmp/bot.log
+```
+
+Stop the bot:
+
+```sh
+kill $(ps aux | grep 'node src/index' | grep -v grep | awk '{print $2}')
+```
+
+After a config change, use the **Restart bot** button in the admin panel (`/config`) — it spawns a fresh process and exits the current one automatically.
 
 ## Exposing the admin panel
 
