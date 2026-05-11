@@ -85,6 +85,15 @@ const SCHEMA = [
     placeholder: 'לא יכול/ה',
   },
   {
+    path: 'googleForm.maybeAnswer',
+    section: 'googleForm',
+    label: '"Might come" answer text',
+    help: 'Exact text of the "might come" option in the form. Used as a secondary tiebreaker before sending a WhatsApp poll. Leave blank if your form has no such option.',
+    type: 'string',
+    required: false,
+    placeholder: 'אולי',
+  },
+  {
     path: 'googleForm.deleteWebhookUrl',
     section: 'googleForm',
     label: 'Delete-webhook URL',
