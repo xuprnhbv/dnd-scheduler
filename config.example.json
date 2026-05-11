@@ -15,6 +15,7 @@
       "REPLACE_DM_ROW2_ID": "Slot 2 label"
     },
     "unavailableAnswer": "REPLACE_WITH_CANNOT_PLAY_OPTION_TEXT",
+    "maybeAnswer": "REPLACE_WITH_MIGHT_COME_OPTION_TEXT",
     "deleteWebhookUrl": "REPLACE_WITH_APPS_SCRIPT_WEB_APP_URL",
     "deleteWebhookSecret": "REPLACE_WITH_LONG_RANDOM_STRING"
   },

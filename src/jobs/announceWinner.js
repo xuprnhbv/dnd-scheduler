@@ -33,13 +33,15 @@ function appendCalendarLink(text, link) {
 }
 
 function tallyCounts(playerResponses) {
-  const counts = {};
-  for (const slots of playerResponses) {
-    for (const slot of slots) {
-      counts[slot] = (counts[slot] || 0) + 1;
-    }
+  const yes = {};
+  const maybe = {};
+  for (const r of playerResponses) {
+    const y = (r && r.yes) || [];
+    const m = (r && r.maybe) || [];
+    for (const slot of y) yes[slot] = (yes[slot] || 0) + 1;
+    for (const slot of m) maybe[slot] = (maybe[slot] || 0) + 1;
   }
-  return counts;
+  return { yes, maybe };
 }
 
 function findTopOptions(counts) {
@@ -53,13 +55,29 @@ function findTopOptions(counts) {
 }
 
 // Keep only slots the DM said they can play (from the DM-only question).
-// Returns { effectiveCounts, dmHadNoSlots }.
+// `counts` may be a plain { slot: n } map (legacy) or { yes, maybe } pair.
+// Returns the same shape as the input, plus dmHadNoSlots based on yes-counts
+// (a slot with only "maybe" votes does not on its own make the DM available).
 function applyDmFilter(counts, dmResponse) {
   const allowed = new Set(dmResponse);
-  const effectiveCounts = {};
-  for (const [slot, count] of Object.entries(counts)) {
-    if (allowed.has(slot)) effectiveCounts[slot] = count;
+  const filter = (m) => {
+    const out = {};
+    for (const [slot, count] of Object.entries(m || {})) {
+      if (allowed.has(slot)) out[slot] = count;
+    }
+    return out;
+  };
+  if (counts && (counts.yes || counts.maybe)) {
+    const yes = filter(counts.yes);
+    const maybe = filter(counts.maybe);
+    // Winner selection is driven by "yes" votes; "maybe" is only a tiebreaker.
+    // If no DM-allowed slot has any yes vote, the DM has no usable slot.
+    return {
+      effectiveCounts: { yes, maybe },
+      dmHadNoSlots: Object.keys(yes).length === 0,
+    };
   }
+  const effectiveCounts = filter(counts);
   return {
     effectiveCounts,
     dmHadNoSlots: Object.keys(effectiveCounts).length === 0,
@@ -92,7 +110,7 @@ async function run({ config, db, whatsapp, googleForm, googleCalendar, now = new
 
   const counts = tallyCounts(playerResponses);
 
-  if (Object.keys(counts).length === 0) {
+  if (Object.keys(counts.yes).length === 0 && Object.keys(counts.maybe).length === 0) {
     const noRespMsg = await whatsapp.sendText(config.groupId, config.messages.noResponses);
     await whatsapp.pinMessage(noRespMsg);
     db.setWinner(weekStart, '');
@@ -112,10 +130,25 @@ async function run({ config, db, whatsapp, googleForm, googleCalendar, now = new
     return { skipped: false, outcome: 'dm-unavailable' };
   }
 
-  const eligible = Object.keys(effectiveCounts).join(', ');
+  const eligible = Object.keys(effectiveCounts.yes).join(', ');
   logger.info(`[announceWinner] DM filter applied — eligible slots: ${eligible}`);
 
-  const { tied } = findTopOptions(effectiveCounts);
+  let { tied } = findTopOptions(effectiveCounts.yes);
+
+  if (tied.length > 1) {
+    // Yes-vote tie: re-rank tied slots by "might come" counts.
+    const maybeAmongTied = {};
+    for (const slot of tied) maybeAmongTied[slot] = effectiveCounts.maybe[slot] || 0;
+    const maybeTop = findTopOptions(maybeAmongTied);
+    if (maybeTop.max > 0 && maybeTop.tied.length === 1) {
+      logger.info(`[announceWinner] yes-vote tie broken by maybe-counts: ${tied.join(', ')} -> ${maybeTop.tied[0]}`);
+      tied = maybeTop.tied;
+    } else if (maybeTop.max > 0 && maybeTop.tied.length < tied.length) {
+      // Maybe narrowed the tie but didn't fully resolve it — poll on the narrower set.
+      logger.info(`[announceWinner] yes-vote tie narrowed by maybe-counts: ${tied.join(', ')} -> ${maybeTop.tied.join(', ')}`);
+      tied = maybeTop.tied;
+    }
+  }
 
   if (tied.length === 1) {
     const winner = tied[0];
