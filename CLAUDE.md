@@ -65,6 +65,8 @@ SQLite at `state.db` (WAL mode). Two tables:
 
 ## Deployment (VPS)
 
+> ⚠️ **ALWAYS verify where the bot is actually running before touching anything on the server.** There are stale copies of the repo at other paths (e.g. `/root/dnd-scheduler/`). Before any action, run `ps aux | grep 'node src/index'` and inspect `/proc/<pid>/cwd` (or check the symlink target of `readlink /proc/<pid>/cwd`) to confirm the live working directory. Editing files, restarting, or running `--test` from the wrong dir will silently use the wrong `config.json` / `state.db` / `.wwebjs_auth/`. The canonical install is `/opt/dnd-poll-bot/` — but trust the running process, not this doc.
+
 The bot runs in a `tmux` session on the VPS at `/opt/dnd-poll-bot`:
 ```bash
 tmux new-session -d -s dnd-bot
@@ -72,3 +74,12 @@ tmux send-keys -t dnd-bot 'cd /opt/dnd-poll-bot && node src/index.js' Enter
 tmux capture-pane -t dnd-bot -p   # view output
 ```
 Logs are in `logs/`. To redeploy: build a tarball excluding `node_modules`, `.git`, `.wwebjs_auth`, `state.db`, and `config.json`; extract on server; `npm install`.
+
+### Server-side gotchas (learned the hard way)
+
+- **Snap chromium hijacks the user-data-dir.** `/usr/bin/chromium-browser` is a shell wrapper that execs `/snap/bin/chromium`. Because of snap confinement, the chromium process IGNORES the `--user-data-dir` puppeteer passes and writes its profile to `/root/snap/chromium/common/chromium/Default/` instead. So the WhatsApp IndexedDB / cookies / linked-device session live there, NOT in `/opt/dnd-poll-bot/.wwebjs_auth/session/` (which stays empty). Implications:
+  - When debugging auth, look in `/root/snap/chromium/common/chromium/Default/IndexedDB/https_web.whatsapp.com_0.indexeddb.leveldb/` for the real session.
+  - If chromium is killed abruptly it leaves `Singleton{Lock,Cookie,Socket}` symlinks in `/root/snap/chromium/common/chromium/`. New launches can hang or behave oddly. Clear them: `rm -f /root/snap/chromium/common/chromium/Singleton*`.
+- **`waitForReady` timeout is borderline.** The default 120s in `src/whatsapp.js` is sometimes too short with snap chromium — full auth+ready can take ~105s after `init()` returns. A first-attempt timeout is a known failure mode; just retry (or bump the timeout to 300s temporarily while debugging).
+- **`announceWinner` flips `winner_announced=1` BEFORE sending the message** (`db.setWinner` in `src/jobs/announceWinner.js:155`). If `sendEvent` then fails (e.g. puppeteer "Attempted to use detached Frame"), the DB believes the winner was announced even though no message went out, and the idempotency check will skip future runs. Recovery: `UPDATE poll_state SET winner_announced=0, winner_slot=NULL WHERE week_start='YYYY-MM-DD'` then re-run `node src/index.js --test announce-winner`.
+- **Only one process can use the WhatsApp auth at a time.** Before running `--test ...` you MUST stop the running bot (otherwise puppeteer hits "The browser is already running for ... session"). Restart it afterwards.
