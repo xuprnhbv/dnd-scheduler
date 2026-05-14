@@ -152,10 +152,11 @@ async function run({ config, db, whatsapp, googleForm, googleCalendar, now = new
 
   if (tied.length === 1) {
     const winner = tied[0];
-    db.setWinner(weekStart, winner);
 
-    let calendarLink = null;
-    if (googleCalendar) {
+    // Reuse a calendar event from a prior attempt that crashed mid-flight,
+    // so retries don't create duplicate events on the same calendar.
+    let calendarLink = state.calendarEventLink || null;
+    if (googleCalendar && !calendarLink) {
       const cal = await googleCalendar.createSessionEvent({ weekStart, slotLabel: winner, timezone: config.timezone });
       if (cal.ok) {
         calendarLink = cal.htmlLink;
@@ -172,6 +173,10 @@ async function run({ config, db, whatsapp, googleForm, googleCalendar, now = new
       whatsapp, config, weekStart, slotLabel: winner, text,
     });
     await whatsapp.pinMessage(winnerMsg);
+    // Mark announced only after the message actually went out; if sendSessionAnnouncement
+    // throws (e.g. puppeteer "detached Frame"), the week stays unannounced and a retry
+    // will re-send instead of being skipped by the idempotency check above.
+    db.setWinner(weekStart, winner);
     logger.info(`[announceWinner] winner: ${winner}`);
     return { skipped: false, outcome: 'winner', winner };
   }
