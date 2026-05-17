@@ -92,6 +92,23 @@ async function main() {
 
   scheduler.start(ctx);
 
+  // Liveness probe: catch a silently-detached puppeteer frame BEFORE a
+  // scheduled job hits it. whatsapp-web.js does not fire 'disconnected'
+  // for puppeteer-level detachment, so without this we only find out at
+  // the next scheduled send — which may be a week away.
+  const LIVENESS_INTERVAL_MS = 30 * 60 * 1000;
+  const livenessHandle = setInterval(async () => {
+    if (!whatsapp.ready) return;
+    try {
+      await whatsapp.client.getState();
+    } catch (err) {
+      logger.warn(`[liveness] puppeteer probe failed: ${err.message}. Forcing reinit.`);
+      try { await whatsapp.init(); }
+      catch (reinitErr) { logger.error('[liveness] reinit failed:', reinitErr); }
+    }
+  }, LIVENESS_INTERVAL_MS);
+  livenessHandle.unref();
+
   const app = adminServer.create({ config, db, whatsapp, googleForm, googleCalendar });
   const port = config.adminPanel.port || 3000;
   app.listen(port, () => {
@@ -117,12 +134,14 @@ async function main() {
 
   process.on('SIGTERM', async () => {
     logger.info('SIGTERM received, shutting down');
+    clearInterval(livenessHandle);
     await whatsapp.destroy();
     db.close();
     process.exit(process.env.DND_RESTART_REQUESTED ? 1 : 0);
   });
   process.on('SIGINT', async () => {
     logger.info('SIGINT received, shutting down');
+    clearInterval(livenessHandle);
     await whatsapp.destroy();
     db.close();
     process.exit(0);

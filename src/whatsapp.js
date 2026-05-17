@@ -59,6 +59,24 @@ function buildPuppeteerConfig() {
   return cfg;
 }
 
+// Puppeteer-level transient errors that mean the underlying page/frame
+// is gone. whatsapp-web.js does NOT fire 'disconnected' in these cases —
+// the wwjs client still thinks it's ready while every op throws. The
+// only recovery is a full client re-init.
+const TRANSIENT_PATTERNS = [
+  'Attempted to use detached Frame',
+  'Execution context was destroyed',
+  'Target closed',
+  'Session closed',
+  'Protocol error',
+  'Most likely the page has been closed',
+];
+
+function isTransientPuppeteerError(err) {
+  const m = err && err.message;
+  return !!m && TRANSIENT_PATTERNS.some((p) => m.includes(p));
+}
+
 function contactIdFromNumber(number) {
   const clean = String(number).replace(/[^0-9]/g, '');
   return `${clean}@c.us`;
@@ -170,26 +188,50 @@ function createWhatsApp(db = null) {
     if (!ready) await waitForReady();
   }
 
+  // Run a WhatsApp operation, and if it fails with a transient Puppeteer
+  // error (e.g. "Attempted to use detached Frame"), reinitialize the
+  // client once and retry. ensureReady() lives inside `fn` so that the
+  // retry waits for the fresh client to come up.
+  async function withTransientRetry(opName, fn) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (!isTransientPuppeteerError(err)) throw err;
+      logger.warn(
+        `[whatsapp] ${opName} hit transient puppeteer error: ${err.message}. ` +
+        `Reinitializing client and retrying once.`,
+      );
+      ready = false;
+      await init();
+      return await fn();
+    }
+  }
+
   async function sendText(chatId, text, options = {}) {
-    await ensureReady();
-    return client.sendMessage(chatId, text, options);
+    return withTransientRetry('sendText', async () => {
+      await ensureReady();
+      return client.sendMessage(chatId, text, options);
+    });
   }
 
   async function sendPoll(chatId, question, options, { allowMultipleAnswers = true } = {}) {
-    await ensureReady();
-    const poll = new Poll(question, options, { allowMultipleAnswers });
-    const msg = await client.sendMessage(chatId, poll);
-    return msg;
+    return withTransientRetry('sendPoll', async () => {
+      await ensureReady();
+      const poll = new Poll(question, options, { allowMultipleAnswers });
+      return client.sendMessage(chatId, poll);
+    });
   }
 
   async function sendEvent(chatId, name, startTime, { endTime, description } = {}) {
-    await ensureReady();
-    const event = new ScheduledEvent(name, startTime, {
-      endTime,
-      description,
-      callType: 'none',
+    return withTransientRetry('sendEvent', async () => {
+      await ensureReady();
+      const event = new ScheduledEvent(name, startTime, {
+        endTime,
+        description,
+        callType: 'none',
+      });
+      return client.sendMessage(chatId, event);
     });
-    return client.sendMessage(chatId, event);
   }
 
   // Pin a message for the given duration (default 7 days).
@@ -202,59 +244,72 @@ function createWhatsApp(db = null) {
       return;
     }
 
-    const chatId = msg.id && msg.id.remote;
+    return withTransientRetry('pinMessage', async () => {
+      await ensureReady();
+      const chatId = msg.id && msg.id.remote;
 
-    if (db && chatId) {
-      const prevIds = db.getBotPinnedMessages(chatId);
-      for (const prevId of prevIds) {
-        try {
-          const prevMsg = await getMessageById(chatId, prevId);
-          if (prevMsg && typeof prevMsg.unpin === 'function') {
-            await prevMsg.unpin();
-            logger.info('[pinMessage] unpinned previous bot-pinned message', prevId);
+      if (db && chatId) {
+        const prevIds = db.getBotPinnedMessages(chatId);
+        for (const prevId of prevIds) {
+          try {
+            const prevMsg = await getMessageById(chatId, prevId);
+            if (prevMsg && typeof prevMsg.unpin === 'function') {
+              await prevMsg.unpin();
+              logger.info('[pinMessage] unpinned previous bot-pinned message', prevId);
+            }
+          } catch (err) {
+            if (isTransientPuppeteerError(err)) throw err;
+            logger.warn('[pinMessage] could not unpin previous message', prevId, ':', err.message);
           }
-        } catch (err) {
-          logger.warn('[pinMessage] could not unpin previous message', prevId, ':', err.message);
+          db.removeBotPinnedMessage(chatId, prevId);
         }
-        db.removeBotPinnedMessage(chatId, prevId);
       }
-    }
 
-    try {
-      await msg.pin(durationSecs);
-      logger.info('[pinMessage] message pinned for', durationSecs, 'seconds');
-      if (db && chatId && msg.id._serialized) {
-        db.addBotPinnedMessage(chatId, msg.id._serialized);
+      try {
+        await msg.pin(durationSecs);
+        logger.info('[pinMessage] message pinned for', durationSecs, 'seconds');
+        if (db && chatId && msg.id._serialized) {
+          db.addBotPinnedMessage(chatId, msg.id._serialized);
+        }
+      } catch (err) {
+        if (isTransientPuppeteerError(err)) throw err;
+        logger.warn('[pinMessage] could not pin message (bot may not be a group admin):', err.message);
       }
-    } catch (err) {
-      logger.warn('[pinMessage] could not pin message (bot may not be a group admin):', err.message);
-    }
+    });
   }
 
   // Fetch a message by chatId + serialized message id. Returns null if missing.
   async function getMessageById(chatId, msgId) {
-    await ensureReady();
-    try {
-      const chat = await client.getChatById(chatId);
-      const msgs = await chat.fetchMessages({ limit: 200 });
-      const found = msgs.find((m) => m.id && m.id._serialized === msgId);
-      if (found) return found;
-      // Fallback: getMessageById on client if available
-      if (typeof client.getMessageById === 'function') {
-        return await client.getMessageById(msgId);
+    return withTransientRetry('getMessageById', async () => {
+      await ensureReady();
+      try {
+        const chat = await client.getChatById(chatId);
+        const msgs = await chat.fetchMessages({ limit: 200 });
+        const found = msgs.find((m) => m.id && m.id._serialized === msgId);
+        if (found) return found;
+        if (typeof client.getMessageById === 'function') {
+          return await client.getMessageById(msgId);
+        }
+        return null;
+      } catch (err) {
+        if (isTransientPuppeteerError(err)) throw err;
+        logger.warn('getMessageById error:', err.message);
+        return null;
       }
-      return null;
-    } catch (err) {
-      logger.warn('getMessageById error:', err.message);
-      return null;
-    }
+    });
   }
 
   // Returns { counts, voters, allVoters, options }
   // counts: { [optionName]: number }  — unique voters per option
   // allVoters: string[]               — every number that voted at all
   async function readPollVotes(chatId, pollMsgId) {
-    await ensureReady();
+    return withTransientRetry('readPollVotes', async () => {
+      await ensureReady();
+      return _readPollVotesInner(chatId, pollMsgId);
+    });
+  }
+
+  async function _readPollVotesInner(chatId, pollMsgId) {
     const msg = await getMessageById(chatId, pollMsgId);
     if (!msg) throw new Error(`Poll message not found: ${pollMsgId}`);
 
@@ -307,16 +362,20 @@ function createWhatsApp(db = null) {
   }
 
   async function getGroupParticipantNumbers(groupId) {
-    await ensureReady();
-    const chat = await client.getChatById(groupId);
-    if (!chat.isGroup) throw new Error(`Chat ${groupId} is not a group`);
-    const participants = chat.participants || [];
-    return participants.map((p) => numberFromContactId(p.id && p.id._serialized));
+    return withTransientRetry('getGroupParticipantNumbers', async () => {
+      await ensureReady();
+      const chat = await client.getChatById(groupId);
+      if (!chat.isGroup) throw new Error(`Chat ${groupId} is not a group`);
+      const participants = chat.participants || [];
+      return participants.map((p) => numberFromContactId(p.id && p.id._serialized));
+    });
   }
 
   async function listChats() {
-    await ensureReady();
-    return client.getChats();
+    return withTransientRetry('listChats', async () => {
+      await ensureReady();
+      return client.getChats();
+    });
   }
 
   async function destroy() {
@@ -346,4 +405,10 @@ function createWhatsApp(db = null) {
   };
 }
 
-module.exports = { createWhatsApp, contactIdFromNumber, numberFromContactId };
+module.exports = {
+  createWhatsApp,
+  contactIdFromNumber,
+  numberFromContactId,
+  isTransientPuppeteerError,
+  TRANSIENT_PATTERNS,
+};

@@ -11,7 +11,7 @@ node src/index.js --test <job>     # Run a single job manually (see job keys bel
 node bin/hash-password.js <pw>     # Generate bcrypt hash for config.adminPanel.passwordHash
 ```
 
-`--test` job keys: `create-poll`, `send-reminder`, `announce-winner`, `announce-tiebreaker`, `seed-next-week`.
+`--test` job keys: `post-form-link`, `send-reminder`, `announce-winner`, `announce-tiebreaker`.
 
 ## Configuration
 
@@ -24,17 +24,18 @@ To find the WhatsApp `groupId`: start the bot with `"groupId": "REPLACE_..."`, s
 The bot is a single Node.js process with three concerns running in parallel:
 
 **1. Scheduled jobs** (`src/scheduler.js` + `src/jobs/`)  
-Five cron jobs run weekly in the configured timezone:
-- Sunday 10:00 → `createMainPoll` — post WhatsApp poll from that week's slots, lock slots, pin poll 7 days
-- Tuesday 10:00 → `sendReminder` — @mention members who haven't voted yet
-- Wednesday 10:00 → `announceWinner` — tally votes, apply DM filter, announce winner or post tiebreaker poll
-- Wednesday 20:00 → `announceTiebreaker` — read tiebreaker poll, announce final winner
-- `seedNextWeekSlots` — called after winner/tiebreaker jobs; seeds next week's editable slots
+Weekly cron jobs in the configured timezone (current Google-Form flow):
+- Sunday 10:00 → `postFormLink` — announce this week's Google Form link in the group, pin for 7 days, record message id, then wipe last week's form responses
+- Tuesday 10:00 → `sendReminder` — read form responses, @mention members who haven't voted yet
+- Wednesday 10:00 → `announceWinner` — tally form responses, apply DM filter, announce winner or post a tiebreaker WhatsApp poll
+- Wednesday 20:00 → `announceTiebreaker` — read tiebreaker poll votes, announce final winner
 
-All jobs are idempotent (check DB state before acting) and are passed a shared `ctx = { config, db, whatsapp }`.
+All jobs are idempotent (check DB state before acting) and are passed a shared `ctx = { config, db, whatsapp, googleForm, googleCalendar }`. The scheduler wrapper only logs errors — it does not retry; jobs that need recovery must rely on idempotency at the next scheduled run, or on the WhatsApp wrapper's in-flight retry (below).
 
 **2. WhatsApp client** (`src/whatsapp.js`)  
 Wraps `whatsapp-web.js`. First run prints a QR code; session is persisted in `.wwebjs_auth/`. On VPS, detects system Chrome (preferred over Puppeteer's bundled binary) and uses `protocolTimeout: 0` plus a 3-attempt retry loop to survive WhatsApp's internal navigation errors during startup. Key methods: `sendPoll`, `sendText`, `readPollVotes`, `pinMessage`, `getGroupParticipantNumbers`.
+
+Every public op is wrapped with `withTransientRetry`: on a Puppeteer-level transient error (`detached Frame`, `Execution context was destroyed`, `Target closed`, `Session closed`, `Protocol error`, `Most likely the page has been closed`) the wrapper forces a full client re-init and retries the op once. This catches the case where the underlying Chromium frame detaches silently after multi-day uptime without firing whatsapp-web.js's `disconnected` event. `src/index.js` also runs a 30-minute liveness probe (`client.getState()`) that triggers the same re-init when the probe throws — so detachment is usually healed before the next cron fires.
 
 **3. Admin panel** (`src/admin/server.js`)  
 Express app at `config.adminPanel.port` (default 3000). Password-protected (bcrypt + express-session, 5-attempt rate limit). Main panel lets the admin edit next week's time slots before the poll fires and manually trigger the poll if needed. Slots are stored as a JSON array in SQLite and locked after the poll is posted.
@@ -44,8 +45,10 @@ Express app at `config.adminPanel.port` (default 3000). Password-protected (bcry
 
 **State machine per week** (stored in `state.db`):
 ```
-slots editable → poll posted (slots locked) → reminder sent → winner announced / tiebreaker posted → tiebreaker decided
+slots editable → form announced (slots locked, mainPollId = announcement msg id) → reminder sent → winner announced / tiebreaker posted → tiebreaker decided
 ```
+
+**`postFormLink` ordering.** Send + pin + `db.setMainPoll()` happen FIRST; `googleForm.deleteAllResponses()` is the LAST step. A send failure must not wipe last week's responses without a replacement announcement.
 
 **DM availability filter** (`src/jobs/announceWinner.js` → `applyDmFilter`): if `config.dmNumber` is set, only slots that the DM voted for are eligible. If the DM voted for none, `dmUnavailable` message is sent and the week is cancelled.
 
