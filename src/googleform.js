@@ -29,8 +29,10 @@ function createGoogleForm(formConfig) {
   const {
     formId,
     serviceAccountKeyPath,
-    playerSlotQuestions,  // { questionId: slotLabel, ... }  one entry per grid row
-    dmSlotQuestions,      // { questionId: slotLabel, ... }  one entry per grid row
+    playerSlotQuestions,  // legacy { questionId: slotLabel }; used only when playerSlotItemId is unset
+    dmSlotQuestions,      // legacy { questionId: slotLabel }; used only when dmSlotItemId is unset
+    playerSlotItemId,     // itemId of the player-availability grid item — rows auto-discovered via Forms API
+    dmSlotItemId,         // itemId of the DM-availability grid item — rows auto-discovered via Forms API
     unavailableAnswer,
     maybeAnswer,
     deleteWebhookUrl,
@@ -38,10 +40,12 @@ function createGoogleForm(formConfig) {
   } = formConfig;
 
   if (!formId) throw new Error('googleForm.formId is not set');
-  if (!playerSlotQuestions || !Object.keys(playerSlotQuestions).length)
-    throw new Error('googleForm.playerSlotQuestions is not set');
-  if (!dmSlotQuestions || !Object.keys(dmSlotQuestions).length)
-    throw new Error('googleForm.dmSlotQuestions is not set');
+  const hasPlayerMap = playerSlotQuestions && Object.keys(playerSlotQuestions).length;
+  const hasDmMap = dmSlotQuestions && Object.keys(dmSlotQuestions).length;
+  if (!playerSlotItemId && !hasPlayerMap)
+    throw new Error('googleForm: set either playerSlotItemId (auto-discover) or playerSlotQuestions (legacy)');
+  if (!dmSlotItemId && !hasDmMap)
+    throw new Error('googleForm: set either dmSlotItemId (auto-discover) or dmSlotQuestions (legacy)');
 
   // The column value that means "cannot play". Anything else = can play,
   // unless it matches the optional `maybeAnswer` ("might come"), which is
@@ -53,12 +57,42 @@ function createGoogleForm(formConfig) {
   const auth = new google.auth.GoogleAuth({ keyFile, scopes: SCOPES });
   const forms = google.forms({ version: 'v1', auth });
 
-  // Returns { playerSlots: [label, ...], dmSlots: [label, ...] }
-  // Labels come directly from config (no API call needed).
-  function getSlotOptions() {
+  // Fetch the form structure and build { questionId: rowLabel } for the two
+  // grid items, replacing the legacy per-row config mapping. If a *SlotItemId
+  // isn't configured, fall back to the legacy { questionId: slotLabel } map.
+  // Newly-added grid rows in Google Forms are picked up automatically on each call.
+  async function loadGridMaps() {
+    if (!playerSlotItemId && !dmSlotItemId) {
+      return { playerMap: playerSlotQuestions || {}, dmMap: dmSlotQuestions || {} };
+    }
+    const res = await forms.forms.get({ formId });
+    const items = (res.data && res.data.items) || [];
+    function mapForItem(itemId) {
+      if (!itemId) return null;
+      const item = items.find((i) => i.itemId === itemId);
+      if (!item || !item.questionGroupItem) return null;
+      const out = {};
+      for (const q of item.questionGroupItem.questions || []) {
+        const qid = q.questionId;
+        const title = q.rowQuestion && q.rowQuestion.title;
+        if (qid && title) out[qid] = title;
+      }
+      return out;
+    }
+    const playerMap = playerSlotItemId ? mapForItem(playerSlotItemId) : null;
+    const dmMap = dmSlotItemId ? mapForItem(dmSlotItemId) : null;
     return {
-      playerSlots: Object.values(playerSlotQuestions),
-      dmSlots: Object.values(dmSlotQuestions),
+      playerMap: playerMap || playerSlotQuestions || {},
+      dmMap: dmMap || dmSlotQuestions || {},
+    };
+  }
+
+  // Returns { playerSlots: [label, ...], dmSlots: [label, ...] }
+  async function getSlotOptions() {
+    const { playerMap, dmMap } = await loadGridMaps();
+    return {
+      playerSlots: Object.values(playerMap),
+      dmSlots: Object.values(dmMap),
     };
   }
 
@@ -99,6 +133,8 @@ function createGoogleForm(formConfig) {
   //                                       Most-recent DM response wins if >1.
   //   rawCount:        number           — total responses in the form.
   async function readResponses() {
+    const { playerMap, dmMap } = await loadGridMaps();
+
     let responses = [];
     let pageToken;
     do {
@@ -112,10 +148,10 @@ function createGoogleForm(formConfig) {
     let dmResponseTime = 0;
 
     for (const r of responses) {
-      const playerSlots = slotsFromGridAnswers(r, playerSlotQuestions);
+      const playerSlots = slotsFromGridAnswers(r, playerMap);
       if (playerSlots !== null) playerResponses.push(playerSlots);
 
-      const dmSlots = slotsFromGridAnswers(r, dmSlotQuestions);
+      const dmSlots = slotsFromGridAnswers(r, dmMap);
       if (dmSlots !== null) {
         const t = Date.parse(r.lastSubmittedTime || r.createTime || 0) || 0;
         if (t >= dmResponseTime) {

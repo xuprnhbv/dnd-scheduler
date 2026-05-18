@@ -151,7 +151,9 @@ function validateConfig(cfg, schema) {
     if (isCalField && !calActive) continue;
 
     // ── Required check ────────────────────────────────────────────────────────
-    if (field.required || (isCalField && calActive)) {
+    // isCalField && calActive treats cal fields as required when the block is
+    // active, UNLESS the field is explicitly marked optional: true.
+    if (field.required || (isCalField && calActive && !field.optional)) {
       if (field.type === 'slotMap' || field.type === 'slotTimesMap') {
         if (value == null || typeof value !== 'object' || Object.keys(value).length === 0) {
           errors.push({ path: field.path, message: `${field.label}: at least one row is required.` });
@@ -180,18 +182,19 @@ function validateConfig(cfg, schema) {
         errors.push({ path: field.path, message: `${field.label}: must be a valid URL.` });
       }
     } else if (field.type === 'slotMap') {
+      const keyLabel = field.keyHeader || 'key';
       const seen = new Set();
       for (const [qid, label] of Object.entries(value)) {
         if (!qid.trim()) {
-          errors.push({ path: field.path, message: `${field.label}: question IDs cannot be blank.` });
+          errors.push({ path: field.path, message: `${field.label}: ${keyLabel} cannot be blank.` });
           break;
         }
         if (!label || !String(label).trim()) {
-          errors.push({ path: field.path, message: `${field.label}: slot labels cannot be blank.` });
+          errors.push({ path: field.path, message: `${field.label}: value cannot be blank.` });
           break;
         }
         if (seen.has(qid)) {
-          errors.push({ path: field.path, message: `${field.label}: duplicate question ID "${qid}".` });
+          errors.push({ path: field.path, message: `${field.label}: duplicate ${keyLabel} "${qid}".` });
           break;
         }
         seen.add(qid);
@@ -319,23 +322,25 @@ function validateRuntimeConfig(cfg) {
       errors.push(`config.googleForm.${k} is not set`);
     }
   }
-  for (const k of ['playerSlotQuestions', 'dmSlotQuestions']) {
-    if (!cfg.googleForm[k] || typeof cfg.googleForm[k] !== 'object' || !Object.keys(cfg.googleForm[k]).length) {
-      errors.push(`config.googleForm.${k} must be an object mapping questionId → slot label`);
+  // Either the grid itemId (auto-discovery) or the legacy per-row map must be set.
+  for (const [itemIdKey, mapKey] of [['playerSlotItemId', 'playerSlotQuestions'], ['dmSlotItemId', 'dmSlotQuestions']]) {
+    const hasItemId = cfg.googleForm[itemIdKey] && !String(cfg.googleForm[itemIdKey]).startsWith('REPLACE');
+    const hasMap = cfg.googleForm[mapKey] && typeof cfg.googleForm[mapKey] === 'object' && Object.keys(cfg.googleForm[mapKey]).length;
+    if (!hasItemId && !hasMap) {
+      errors.push(`config.googleForm: set either ${itemIdKey} (auto-discover) or ${mapKey} (legacy)`);
     }
   }
   if (!cfg.adminPanel.passwordHash || String(cfg.adminPanel.passwordHash).startsWith('REPLACE')) {
     errors.push('config.adminPanel.passwordHash is not set. Run: node bin/hash-password.js <your-password>');
   }
   if (cfg.googleCalendar) {
-    for (const k of ['calendarId', 'serviceAccountKeyPath', 'slotTimes']) {
+    for (const k of ['calendarId', 'serviceAccountKeyPath']) {
       if (cfg.googleCalendar[k] == null || String(cfg.googleCalendar[k]).startsWith('REPLACE')) {
         errors.push(`config.googleCalendar.${k} is not set (remove the googleCalendar block to disable calendar events)`);
       }
     }
-    if (typeof cfg.googleCalendar.slotTimes !== 'object' || !Object.keys(cfg.googleCalendar.slotTimes).length) {
-      errors.push('config.googleCalendar.slotTimes must be an object mapping slot label → { dayOfWeek, time }');
-    }
+    // slotTimes is now optional — Hebrew "<day> <time-keyword>" labels resolve via the
+    // built-in parser. slotTimes is only needed for overrides (e.g. שבת ערב → 18:00).
   }
 
   return errors.length ? { ok: false, errors } : { ok: true, errors: [] };
