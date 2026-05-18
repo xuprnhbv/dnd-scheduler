@@ -193,12 +193,13 @@ test('validateConfig: error on invalid URL', () => {
   assert.ok(errors.some((e) => e.path === 'googleForm.publicUrl'));
 });
 
-test('validateConfig: error on empty slotMap', () => {
+test('validateConfig: empty slotMap is allowed (field is now optional)', () => {
+  // playerSlotQuestions is required: false — an empty map is valid since
+  // playerSlotItemId can be used instead for auto-discovery.
   const cfg = makeValidConfig();
-  cfg.googleForm.playerSlotQuestions = {};  // deepMerge won't wipe out existing keys, so assign directly
-  const { ok, errors } = validateConfig(cfg, SCHEMA);
-  assert.equal(ok, false);
-  assert.ok(errors.some((e) => e.path === 'googleForm.playerSlotQuestions'));
+  cfg.googleForm.playerSlotQuestions = {};
+  const { ok } = validateConfig(cfg, SCHEMA);
+  assert.equal(ok, true);
 });
 
 test('validateConfig: error on duplicate slotMap question IDs', () => {

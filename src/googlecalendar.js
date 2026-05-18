@@ -4,6 +4,7 @@ const path = require('path');
 const { google } = require('googleapis');
 const { DateTime } = require('luxon');
 const logger = require('./logger');
+const { parseSlotLabel, DEFAULT_TIME_KEYWORDS } = require('./slotParser');
 
 const SCOPES = ['https://www.googleapis.com/auth/calendar.events'];
 
@@ -23,10 +24,14 @@ function resolveKeyPath(keyPath) {
 }
 
 // Convert a (weekStart, slotLabel) pair into a concrete { start, end } DateTime
-// pair using the configured slotTimes map and duration. Returns null if the slot
-// label has no entry in slotTimes (caller should skip event creation).
-function slotToDateRange(weekStart, slotLabel, slotTimes, durationHours, timezone) {
-  const slotConfig = slotTimes && slotTimes[slotLabel];
+// pair. Resolution order: configured slotTimes entry first, then the auto-parser
+// using slotTimeKeywords (defaults to the בוקר/צהריים/ערב Hebrew table). Returns
+// null if the label can't be resolved either way (caller should skip event creation).
+function slotToDateRange(weekStart, slotLabel, slotTimes, durationHours, timezone, slotTimeKeywords) {
+  let slotConfig = slotTimes && slotTimes[slotLabel];
+  if (!slotConfig) {
+    slotConfig = parseSlotLabel(slotLabel, slotTimeKeywords || DEFAULT_TIME_KEYWORDS);
+  }
   if (!slotConfig) return null;
   const dayOffset = DAY_OFFSETS[String(slotConfig.dayOfWeek || '').toLowerCase()];
   if (dayOffset == null) {
@@ -55,12 +60,12 @@ function createGoogleCalendar(calendarConfig) {
     eventTitle = 'D&D Session',
     eventDurationHours = 5,
     slotTimes,
+    slotTimeKeywords,
   } = calendarConfig;
 
   if (!calendarId) throw new Error('googleCalendar.calendarId is not set');
-  if (!slotTimes || !Object.keys(slotTimes).length) {
-    throw new Error('googleCalendar.slotTimes must map slot labels to { dayOfWeek, time }');
-  }
+  // slotTimes is now optional — labels formatted as Hebrew "<day> <time-keyword>"
+  // resolve via parseSlotLabel; slotTimes only overrides non-conforming labels.
 
   const keyFile = resolveKeyPath(serviceAccountKeyPath);
   const auth = new google.auth.GoogleAuth({ keyFile, scopes: SCOPES });
@@ -73,7 +78,7 @@ function createGoogleCalendar(calendarConfig) {
   async function createSessionEvent({ weekStart, slotLabel, timezone }) {
     let range;
     try {
-      range = slotToDateRange(weekStart, slotLabel, slotTimes, eventDurationHours, timezone);
+      range = slotToDateRange(weekStart, slotLabel, slotTimes, eventDurationHours, timezone, slotTimeKeywords);
     } catch (err) {
       logger.warn(`[googleCalendar] ${err.message}; skipping event`);
       return { ok: false, reason: 'invalid-slot-config' };

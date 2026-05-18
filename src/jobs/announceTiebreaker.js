@@ -46,6 +46,7 @@ async function run({ config, db, whatsapp, googleForm, googleCalendar, now = new
   // Reuse a calendar event from a prior attempt that crashed mid-flight,
   // so retries don't create duplicate events on the same calendar.
   let calendarLink = state.calendarEventLink || null;
+  let slotUnparsed = false;
   if (googleCalendar && !calendarLink) {
     const cal = await googleCalendar.createSessionEvent({ weekStart, slotLabel: winner, timezone: config.timezone });
     if (cal.ok) {
@@ -54,6 +55,7 @@ async function run({ config, db, whatsapp, googleForm, googleCalendar, now = new
       logger.info(`[announceTiebreaker] calendar event created: ${calendarLink}`);
     } else {
       logger.warn(`[announceTiebreaker] calendar event skipped: ${cal.reason}`);
+      if (cal.reason === 'no-slot-mapping') slotUnparsed = true;
     }
   }
 
@@ -63,6 +65,12 @@ async function run({ config, db, whatsapp, googleForm, googleCalendar, now = new
     whatsapp, config, weekStart, slotLabel: winner, text,
   });
   await whatsapp.pinMessage(winnerMsg);
+  // Warn after the pin — so a transient failure of this follow-up doesn't block
+  // the tiebreaker announcement itself from being marked as done.
+  if (slotUnparsed && config.messages.unparsedWinner) {
+    const warnText = renderTemplate(config.messages.unparsedWinner, { slot: winner });
+    await whatsapp.sendText(config.groupId, warnText);
+  }
   // Mark announced only after the message actually went out; if sendSessionAnnouncement
   // throws, the week stays unannounced and a retry will re-send.
   db.setTiebreakerWinner(weekStart, winner);

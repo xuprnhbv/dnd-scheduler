@@ -6,14 +6,8 @@
     "formId": "REPLACE_WITH_FORM_ID",
     "publicUrl": "https://docs.google.com/forms/d/e/REPLACE_WITH_PUBLIC_ID/viewform",
     "serviceAccountKeyPath": "./service-account.json",
-    "playerSlotQuestions": {
-      "REPLACE_ROW1_ID": "Slot 1 label",
-      "REPLACE_ROW2_ID": "Slot 2 label"
-    },
-    "dmSlotQuestions": {
-      "REPLACE_DM_ROW1_ID": "Slot 1 label",
-      "REPLACE_DM_ROW2_ID": "Slot 2 label"
-    },
+    "playerSlotItemId": "REPLACE_WITH_PLAYER_GRID_ITEM_ID",
+    "dmSlotItemId": "REPLACE_WITH_DM_GRID_ITEM_ID",
     "unavailableAnswer": "REPLACE_WITH_CANNOT_PLAY_OPTION_TEXT",
     "maybeAnswer": "REPLACE_WITH_MIGHT_COME_OPTION_TEXT",
     "deleteWebhookUrl": "REPLACE_WITH_APPS_SCRIPT_WEB_APP_URL",
@@ -29,9 +23,13 @@
     "serviceAccountKeyPath": "./service-account.json",
     "eventTitle": "D&D Session",
     "eventDurationHours": 5,
+    "slotTimeKeywords": {
+      "בוקר": "10:00",
+      "צהריים": "13:00",
+      "ערב": "20:00"
+    },
     "slotTimes": {
-      "Slot 1 label": { "dayOfWeek": "thursday", "time": "20:00" },
-      "Slot 2 label": { "dayOfWeek": "friday", "time": "10:00" }
+      "שבת ערב": { "dayOfWeek": "saturday", "time": "18:00" }
     }
   },
   "messages": {
@@ -42,6 +40,7 @@
     "tiebreakerWinner": "🎲 Tiebreaker decided: {slot}. See you there!",
     "noResponses": "No responses received — no session scheduled for this week.",
     "dmUnavailable": "🎲 The DM has no available slots this week — session cancelled.",
-    "dmNoResponse": "⏳ The DM hasn't filled the form yet — holding off on picking a slot."
+    "dmNoResponse": "⏳ The DM hasn't filled the form yet — holding off on picking a slot.",
+    "unparsedWinner": "⚠️ unparsed slot won '{slot}' — no calendar event was created. Please schedule it manually."
   }
 }

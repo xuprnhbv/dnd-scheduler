@@ -69,6 +69,8 @@ function renderField(field, cfg, fieldErrors) {
 
   if (field.type === 'slotMap') {
     const rows = val && typeof val === 'object' ? Object.entries(val) : [];
+    const keyHeader = escapeHtml(field.keyHeader || 'Question ID');
+    const valueHeader = escapeHtml(field.valueHeader || 'Slot label');
     const rowsHtml = rows.map(([qid, slotLabel], i) => `
       <tr>
         <td><input type="text" name="${name}[${i}][questionId]" value="${escapeHtml(qid)}" placeholder="${escapeHtml(field.keyPlaceholder || '')}"/></td>
@@ -77,7 +79,7 @@ function renderField(field, cfg, fieldErrors) {
       </tr>`).join('');
     inputHtml = `
       <table class="slot-table">
-        <thead><tr><th>Question ID</th><th>Slot label</th><th></th></tr></thead>
+        <thead><tr><th>${keyHeader}</th><th>${valueHeader}</th><th></th></tr></thead>
         <tbody id="tbody-${name}">${rowsHtml}</tbody>
       </table>
       <button type="button" class="btn secondary small add-row-btn"
