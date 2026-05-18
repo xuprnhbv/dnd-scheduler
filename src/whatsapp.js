@@ -100,10 +100,10 @@ function createWhatsApp(db = null) {
     for (const r of resolvers) r();
   }
 
-  // 300s default: first-time auth (QR scan) needs a generous human-paced window,
-  // and a transient-error reinit on a slow VPS can take ~2 min for chromium to
-  // come back up. 120s was too tight in practice.
-  function waitForReady(timeoutMs = 300000) {
+  // 900s default: when the linked-device session expires the bot needs to wait
+  // for a human to notice and scan a fresh QR. 300s was too tight if the admin
+  // wasn't already watching the log.
+  function waitForReady(timeoutMs = 900000) {
     if (ready) return Promise.resolve();
     return new Promise((resolve, reject) => {
       const t = setTimeout(() => {
