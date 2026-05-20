@@ -96,15 +96,30 @@ async function main() {
   // scheduled job hits it. whatsapp-web.js does not fire 'disconnected'
   // for puppeteer-level detachment, so without this we only find out at
   // the next scheduled send — which may be a week away.
-  const LIVENESS_INTERVAL_MS = 30 * 60 * 1000;
+  // Probe getState() periodically; only force a reinit after several
+  // consecutive failures. A single getState() error is common (puppeteer
+  // mid-navigation, transient timeout) and reinit gambles with the
+  // session — repeated reinits eventually lose auth and force a QR scan.
+  const LIVENESS_INTERVAL_MS = 5 * 60 * 1000;
+  const LIVENESS_FAILURE_THRESHOLD = 4;
+  let livenessFailures = 0;
   const livenessHandle = setInterval(async () => {
     if (!whatsapp.ready) return;
     try {
-      await whatsapp.client.getState();
+      const state = await whatsapp.client.getState();
+      if (livenessFailures > 0) {
+        logger.info(`[liveness] probe recovered after ${livenessFailures} failure(s) (state=${state})`);
+      }
+      livenessFailures = 0;
     } catch (err) {
-      logger.warn(`[liveness] puppeteer probe failed: ${err.message}. Forcing reinit.`);
-      try { await whatsapp.init(); }
-      catch (reinitErr) { logger.error('[liveness] reinit failed:', reinitErr); }
+      livenessFailures += 1;
+      logger.warn(`[liveness] probe failed (${livenessFailures}/${LIVENESS_FAILURE_THRESHOLD}): ${err.message}`);
+      if (livenessFailures >= LIVENESS_FAILURE_THRESHOLD) {
+        logger.warn('[liveness] failure threshold reached — forcing reinit');
+        livenessFailures = 0;
+        try { await whatsapp.init(); }
+        catch (reinitErr) { logger.error('[liveness] reinit failed:', reinitErr); }
+      }
     }
   }, LIVENESS_INTERVAL_MS);
   livenessHandle.unref();
