@@ -196,7 +196,33 @@ async function buildPanelContext({ config, db, googleForm, now = new Date() }) {
   };
 }
 
-async function renderPanel({ config, db, googleForm, banner = '', now = new Date() }) {
+function renderWhatsappStatus(whatsapp) {
+  if (!whatsapp) {
+    return '<span class="muted">—</span>';
+  }
+  if (whatsapp.ready) {
+    const since = whatsapp.lastReadyAt
+      ? ` <span class="muted">(since ${escapeHtml(whatsapp.lastReadyAt.toISOString().replace('T', ' ').slice(0, 19))} UTC)</span>`
+      : '';
+    return `<span style="color:#8f8">✅ Connected</span>${since}`;
+  }
+  if (whatsapp.sessionLost) {
+    const qrHtml = whatsapp.currentQrDataUrl
+      ? `<div style="margin-top:12px">
+           <img src="${escapeHtml(whatsapp.currentQrDataUrl)}" width="320" height="320"
+                alt="WhatsApp link QR" style="background:#fff;border-radius:6px"/>
+           <div class="muted" style="margin-top:6px;font-size:12px">
+             WhatsApp → Settings → Linked Devices → Link a device.
+             The code refreshes every ~20 s; this page auto-reloads.
+           </div>
+         </div>`
+      : '<div class="muted" style="margin-top:6px">Waiting for QR code…</div>';
+    return `<span class="locked">❌ SESSION LOST — scan to re-link</span>${qrHtml}`;
+  }
+  return '<span style="color:#fc8">⏳ Initializing…</span>';
+}
+
+async function renderPanel({ config, db, whatsapp, googleForm, banner = '', now = new Date() }) {
   const ctx = await buildPanelContext({ config, db, googleForm, now });
   const playerCount = Number(config.playerCount) || 0;
   const formUrl = (config.googleForm && config.googleForm.publicUrl) || '';
@@ -208,8 +234,16 @@ async function renderPanel({ config, db, googleForm, banner = '', now = new Date
     ? '<span class="muted">—</span>'
     : (ctx.dmResponded ? 'Yes' : '<span class="locked">Not yet</span>');
 
+  // While the session is lost, the QR refreshes ~every 20 s. Auto-reload
+  // the dashboard so the user always sees a fresh, scannable code.
+  const autoRefreshHtml = whatsapp && whatsapp.sessionLost
+    ? '<meta http-equiv="refresh" content="15">'
+    : '';
+
   return render(PANEL_HTML, {
     BANNER: banner,
+    AUTO_REFRESH: autoRefreshHtml,
+    WHATSAPP_STATUS: renderWhatsappStatus(whatsapp),
     NEXT_WEEK: escapeHtml(weekRangeLabel(ctx.nextWeek, ctx.tz)),
     NEXT_POLL_TIME: escapeHtml(ctx.nextPollTime),
     FORM_URL: escapeHtml(formUrl),
@@ -323,7 +357,7 @@ function create({ config, db, whatsapp, googleForm }) {
       let banner = '';
       if (req.query.sent) banner = '<div class="banner">✓ Form link sent to the group.</div>';
       if (req.query.err === 'already-sent') banner = '<div class="banner error">Form link was already sent this week.</div>';
-      const html = await renderPanel({ config, db, googleForm, banner });
+      const html = await renderPanel({ config, db, whatsapp, googleForm, banner });
       res.type('text/html').send(html);
     } catch (err) {
       logger.error('panel render error:', err);

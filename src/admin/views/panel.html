@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  {{AUTO_REFRESH}}
   <title>D&amp;D Bot Admin</title>
   <style>
     body { font-family: system-ui, sans-serif; background: #0f0f10; color: #eee; margin: 0; padding: 20px; }
@@ -37,6 +38,13 @@
     </header>
 
     {{BANNER}}
+
+    <div class="card">
+      <h2>Bot status</h2>
+      <div class="kv">
+        <div>WhatsApp</div><div>{{WHATSAPP_STATUS}}</div>
+      </div>
+    </div>
 
     <div class="card">
       <h2>Next week</h2>
