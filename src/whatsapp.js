@@ -3,6 +3,7 @@
 const fs = require('fs');
 const { Client, LocalAuth, Poll, ScheduledEvent } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
+const QRCode = require('qrcode');
 const logger = require('./logger');
 
 // Detect a system Chrome/Chromium to prefer over Puppeteer's bundled build.
@@ -92,9 +93,16 @@ function createWhatsApp(db = null) {
   let ready = false;
   let readyResolvers = [];
   let destroyed = false; // set on intentional destroy() so reconnect loop stops
+  let sessionLostNotified = false; // throttle the loud SESSION LOST error
+  let lastReadyAt = null;
+  let lastQrAt = null;
+  let currentQrDataUrl = null;     // PNG data URL of the latest QR; null once ready
 
   function notifyReady() {
     ready = true;
+    sessionLostNotified = false;
+    currentQrDataUrl = null;
+    lastReadyAt = new Date();
     const resolvers = readyResolvers;
     readyResolvers = [];
     for (const r of resolvers) r();
@@ -138,8 +146,26 @@ function createWhatsApp(db = null) {
       });
 
       client.on('qr', (qr) => {
+        lastQrAt = new Date();
+        // A QR means the linked-device session is gone — only a human with the
+        // phone can recover. Emit one loud ERROR per session-loss event so it
+        // surfaces in monitoring/log scans instead of being buried under
+        // info-level QR ascii art.
+        if (!sessionLostNotified) {
+          logger.error(
+            '[whatsapp] LINKED DEVICE SESSION LOST — scan the QR with your ' +
+            'phone (WhatsApp → Settings → Linked Devices). The current code ' +
+            'is also rendered on the admin dashboard.',
+          );
+          sessionLostNotified = true;
+        }
         logger.info('WhatsApp QR code — scan with your phone:');
         qrcode.generate(qr, { small: true });
+        // Also render a PNG for the admin dashboard so the operator does not
+        // need SSH access to re-link the session.
+        QRCode.toDataURL(qr, { width: 320, margin: 1 })
+          .then((url) => { currentQrDataUrl = url; })
+          .catch((err) => logger.warn('[whatsapp] QR PNG generation failed:', err.message));
       });
 
       client.on('authenticated', () => logger.info('WhatsApp authenticated'));
@@ -166,10 +192,10 @@ function createWhatsApp(db = null) {
         await client.initialize();
         return; // success — exit retry loop
       } catch (err) {
-        const isNavError =
-          err && err.message &&
-          (err.message.includes('Execution context was destroyed') ||
-           err.message.includes('Target closed'));
+        // Retry on any transient puppeteer error — these happen when chrome
+        // dies mid-launch (e.g. OOM-killed during the initial WhatsApp Web
+        // navigation), not just on the two patterns we used to special-case.
+        const isNavError = isTransientPuppeteerError(err);
 
         if (isNavError && attempt < maxRetries) {
           logger.warn(
@@ -405,6 +431,13 @@ function createWhatsApp(db = null) {
     numberFromContactId,
     get client() { return client; },
     get ready() { return ready; },
+    // sessionLost is true when a QR has been shown since the last ready —
+    // i.e. the linked-device session is gone and the bot is waiting for
+    // a human to scan a fresh code.
+    get sessionLost() { return !ready && sessionLostNotified; },
+    get lastReadyAt() { return lastReadyAt; },
+    get lastQrAt() { return lastQrAt; },
+    get currentQrDataUrl() { return currentQrDataUrl; },
   };
 }
 

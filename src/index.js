@@ -75,11 +75,12 @@ async function main() {
 
   const whatsapp = createWhatsApp(db);
   await whatsapp.init();
-  await whatsapp.ensureReady();
 
   const ctx = { config, db, whatsapp, googleForm, googleCalendar };
 
   if (args.test) {
+    // --test mode still blocks on ready — the test job needs WhatsApp.
+    await whatsapp.ensureReady();
     try {
       await runTestJob(args.test, ctx);
     } finally {
@@ -90,6 +91,11 @@ async function main() {
     return;
   }
 
+  // Start the admin panel and scheduler BEFORE waiting for WhatsApp to be
+  // ready. The admin dashboard is how the operator finds out the session is
+  // dead — it must come up even when WhatsApp is QR-stuck. Scheduled jobs
+  // are cron-driven and idempotent; a job firing while !ready will throw
+  // and be retried on the next tick.
   scheduler.start(ctx);
 
   // Liveness probe: catch a silently-detached puppeteer frame BEFORE a
