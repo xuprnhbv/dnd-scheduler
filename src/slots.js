@@ -16,8 +16,8 @@ function currentWeekStart(at, timezone) {
 
 // Returns the ISO date for the upcoming Sunday relative to `at` in the given TZ.
 // If `at` is exactly Sunday 00:00 or later on Sunday, returns *this* Sunday.
-// In other words: the Sunday whose 10:00 cron is the next one that will fire
-// (assuming `at` is before that 10:00; if `at` is after Sunday 10:00, this
+// In other words: the Sunday whose 08:30 cron is the next one that will fire
+// (assuming `at` is before that 08:30; if `at` is after Sunday 08:30, this
 // returns the next week's Sunday).
 function nextPollWeekStart(at, timezone) {
   const dt = DateTime.fromJSDate(at, { zone: timezone });
@@ -28,7 +28,7 @@ function nextPollWeekStart(at, timezone) {
     const daysUntilSunday = 7 - dt.weekday;
     candidate = dt.startOf('day').plus({ days: daysUntilSunday });
   }
-  const pollMoment = candidate.set({ hour: 10, minute: 0, second: 0, millisecond: 0 });
+  const pollMoment = candidate.set({ hour: 8, minute: 30, second: 0, millisecond: 0 });
   if (dt >= pollMoment) {
     return candidate.plus({ days: 7 }).toISODate();
   }

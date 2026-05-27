@@ -25,14 +25,14 @@ function start({ config, db, whatsapp, googleForm, googleCalendar }) {
   const tz = config.timezone;
   const ctx = { config, db, whatsapp, googleForm, googleCalendar };
 
-  // Sunday 10:00 — announce the form link in the group
-  cron.schedule('0 10 * * 0', wrap('postFormLink', () => postFormLink.run(ctx)), { timezone: tz });
+  // Sunday 08:30 — announce the form link in the group
+  cron.schedule('30 8 * * 0', wrap('postFormLink', () => postFormLink.run(ctx)), { timezone: tz });
 
-  // Tuesday 10:00 — remind everyone to fill the form
-  cron.schedule('0 10 * * 2', wrap('sendReminder', () => sendReminder.run(ctx)), { timezone: tz });
+  // Tuesday 08:30 — remind everyone to fill the form
+  cron.schedule('30 8 * * 2', wrap('sendReminder', () => sendReminder.run(ctx)), { timezone: tz });
 
-  // Wednesday 10:00 — announce winner or trigger tiebreaker
-  cron.schedule('0 10 * * 3', wrap('announceWinner', () => announceWinner.run(ctx)), { timezone: tz });
+  // Wednesday 08:30 — announce winner or trigger tiebreaker
+  cron.schedule('30 8 * * 3', wrap('announceWinner', () => announceWinner.run(ctx)), { timezone: tz });
 
   // Wednesday 20:00 — announce tiebreaker winner (no-op if none)
   cron.schedule('0 20 * * 3', wrap('announceTiebreaker', async () => {

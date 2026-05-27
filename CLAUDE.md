@@ -25,9 +25,9 @@ The bot is a single Node.js process with three concerns running in parallel:
 
 **1. Scheduled jobs** (`src/scheduler.js` + `src/jobs/`)  
 Weekly cron jobs in the configured timezone (current Google-Form flow):
-- Sunday 10:00 → `postFormLink` — announce this week's Google Form link in the group, pin for 7 days, record message id, then wipe last week's form responses
-- Tuesday 10:00 → `sendReminder` — read form responses, @mention members who haven't voted yet
-- Wednesday 10:00 → `announceWinner` — tally form responses, apply DM filter, announce winner or post a tiebreaker WhatsApp poll
+- Sunday 08:30 → `postFormLink` — announce this week's Google Form link in the group, pin for 7 days, record message id, then wipe last week's form responses
+- Tuesday 08:30 → `sendReminder` — read form responses, @mention members who haven't voted yet
+- Wednesday 08:30 → `announceWinner` — tally form responses, apply DM filter, announce winner or post a tiebreaker WhatsApp poll
 - Wednesday 20:00 → `announceTiebreaker` — read tiebreaker poll votes, announce final winner
 
 All jobs are idempotent (check DB state before acting) and are passed a shared `ctx = { config, db, whatsapp, googleForm, googleCalendar }`. The scheduler wrapper only logs errors — it does not retry; jobs that need recovery must rely on idempotency at the next scheduled run, or on the WhatsApp wrapper's in-flight retry (below).
