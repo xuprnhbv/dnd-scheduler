@@ -6,9 +6,9 @@ A small Node.js bot that automates weekly D&D session scheduling in a WhatsApp g
 
 | Day / Time (local TZ) | Action |
 |---|---|
-| Sunday 10:00 | Posts the Google Form link in the WhatsApp group (pinned for 7 days). |
-| Tuesday 10:00 | Posts a reminder: "X people filled the form out of Y players!" (no tagging, also pinned). |
-| Wednesday 10:00 | Reads form responses, filters to slots the DM can play, announces the winner. If the top slots are tied, posts a small WhatsApp tiebreaker poll. |
+| Sunday 08:30 | Posts the Google Form link in the WhatsApp group (pinned for 7 days). |
+| Tuesday 08:30 | Posts a reminder: "X people filled the form out of Y players!" (no tagging, also pinned). |
+| Wednesday 08:30 | Reads form responses, filters to slots the DM can play, announces the winner. If the top slots are tied, posts a small WhatsApp tiebreaker poll. |
 | Wednesday 20:00 | If a tiebreaker poll was posted, reads it and announces the final winner. |
 | After winner announced | Bot clears all form responses (via Apps Script webhook) so the next Sunday starts clean. |
 
@@ -307,7 +307,7 @@ The bcrypt password and rate limiter (5 attempts / 15 min / IP) are the only def
 - **403 from Google Forms API**: the service account hasn't been added as an editor on the form, or the Forms API is not enabled in the Cloud project.
 - **`list-form-questions.js` shows `(no question — skipped)`**: the item is a section header, image, or video, not a question. The grid case is handled — anything else legitimately has no questionId.
 - **Messages aren't being pinned**: the bot's WhatsApp account must be a **group admin**. Promote it from the group settings on the phone that owns the linked WhatsApp account.
-- **"DM hasn't filled the form yet"**: the DM must submit the form (answering the DM grid) before Wednesday 10:00. If they miss it, the bot will keep posting the "waiting for DM" message until they respond — kick the announce-winner job manually from the admin panel after the DM submits.
+- **"DM hasn't filled the form yet"**: the DM must submit the form (answering the DM grid) before Wednesday 08:30. If they miss it, the bot will keep posting the "waiting for DM" message until they respond — kick the announce-winner job manually from the admin panel after the DM submits.
 - **Responses not clearing between weeks**: check the Apps Script web app deployment URL and shared secret; test by POSTing `{"secret":"..."}` to the URL manually.
 - **Timezone looks wrong**: `config.timezone` must be a valid IANA zone (e.g. `Asia/Jerusalem`); the cron jobs use that zone, not the server's local time.
 - **Logs**: `logs/bot-YYYY-MM-DD.log` (one file per day). Stdout is also logged.
