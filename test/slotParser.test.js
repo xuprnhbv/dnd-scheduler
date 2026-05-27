@@ -4,9 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { parseSlotLabel, DEFAULT_TIME_KEYWORDS } = require('../src/slotParser');
-// slotToDateRange integration tests live in test/googlecalendar.test.js — that
-// file already imports src/googlecalendar.js which requires 'googleapis'.
-// Avoid importing it here so this file stays runnable without native deps.
+// slotToDateRange integration tests live in test/sessionTime.test.js.
 
 // ── parseSlotLabel ────────────────────────────────────────────────────────────
 

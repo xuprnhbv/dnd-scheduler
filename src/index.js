@@ -7,7 +7,6 @@ const logger = require('./logger');
 const dbLib = require('./db');
 const { createWhatsApp } = require('./whatsapp');
 const { createGoogleForm } = require('./googleform');
-const { createGoogleCalendar } = require('./googlecalendar');
 const scheduler = require('./scheduler');
 const adminServer = require('./admin/server');
 const { currentWeekStart } = require('./slots');
@@ -66,17 +65,11 @@ async function main() {
   const config = loadConfig();
   const db = dbLib.open();
   const googleForm = createGoogleForm(config.googleForm);
-  const googleCalendar = config.googleCalendar
-    ? createGoogleCalendar(config.googleCalendar)
-    : null;
-  if (googleCalendar) {
-    logger.info(`Google Calendar enabled (calendarId=${googleCalendar.calendarId}, ${googleCalendar.eventDurationHours}h "${googleCalendar.eventTitle}")`);
-  }
 
   const whatsapp = createWhatsApp(db);
   await whatsapp.init();
 
-  const ctx = { config, db, whatsapp, googleForm, googleCalendar };
+  const ctx = { config, db, whatsapp, googleForm };
 
   if (args.test) {
     // --test mode still blocks on ready — the test job needs WhatsApp.
@@ -130,7 +123,7 @@ async function main() {
   }, LIVENESS_INTERVAL_MS);
   livenessHandle.unref();
 
-  const app = adminServer.create({ config, db, whatsapp, googleForm, googleCalendar });
+  const app = adminServer.create({ config, db, whatsapp, googleForm });
   const port = config.adminPanel.port || 3000;
   app.listen(port, () => {
     logger.info(`Admin panel listening on :${port}`);
