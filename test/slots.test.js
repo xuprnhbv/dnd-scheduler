@@ -20,12 +20,12 @@ test('currentWeekStart on a Sunday returns that Sunday', () => {
   assert.equal(currentWeekStart(sun, 'Asia/Jerusalem'), '2026-04-19');
 });
 
-test('nextPollWeekStart: before Sunday 10:00 on same week returns that Sunday', () => {
+test('nextPollWeekStart: before Sunday 08:30 on same week returns that Sunday', () => {
   const fri = new Date('2026-04-17T12:00:00Z');
   assert.equal(nextPollWeekStart(fri, 'Asia/Jerusalem'), '2026-04-19');
 });
 
-test('nextPollWeekStart: after Sunday 10:00 rolls to next Sunday', () => {
+test('nextPollWeekStart: after Sunday 08:30 rolls to next Sunday', () => {
   // Sunday 2026-04-19 at 08:00 UTC = 11:00 Jerusalem -> rolls to 2026-04-26
   const sun = new Date('2026-04-19T08:00:00Z');
   assert.equal(nextPollWeekStart(sun, 'Asia/Jerusalem'), '2026-04-26');
