@@ -17,6 +17,9 @@
     .btn:hover { background: #d00; }
     .btn.secondary { background: #333; }
     .btn.secondary:hover { background: #444; }
+    .btn:disabled, .btn:disabled:hover { background: #2a2a2c; color: #666; cursor: not-allowed; }
+    .stage-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+    .stage-buttons form { margin: 0; }
     .muted { color: #888; font-size: 13px; }
     .kv { display: grid; grid-template-columns: 200px 1fr; gap: 6px 12px; font-size: 14px; }
     .kv div:nth-child(odd) { color: #888; }
@@ -67,7 +70,7 @@
         <div>Winner slot</div><div>{{CUR_WINNER_SLOT}}</div>
         <div>Tiebreaker</div><div>{{CUR_TIEBREAKER}}</div>
       </div>
-      {{SEND_FORM_BUTTON}}
+      {{STAGE_BUTTONS}}
     </div>
   </div>
 </body>

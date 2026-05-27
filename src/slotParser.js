@@ -1,6 +1,6 @@
 'use strict';
 
-// Maps Hebrew day name → English lowercase key matching DAY_OFFSETS in googlecalendar.js.
+// Maps Hebrew day name → English lowercase key matching DAY_OFFSETS in sessionTime.js.
 const HEBREW_DAYS = {
   'ראשון': 'sunday',
   'שני': 'monday',

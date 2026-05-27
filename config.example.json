@@ -18,10 +18,7 @@
     "passwordHash": "REPLACE_WITH_BCRYPT_HASH",
     "sessionSecret": "REPLACE_WITH_LONG_RANDOM_STRING"
   },
-  "googleCalendar": {
-    "calendarId": "REPLACE_WITH_CALENDAR_ID",
-    "serviceAccountKeyPath": "./service-account.json",
-    "eventTitle": "D&D Session",
+  "sessionTimes": {
     "eventDurationHours": 5,
     "slotTimeKeywords": {
       "בוקר": "10:00",
@@ -40,7 +37,6 @@
     "tiebreakerWinner": "🎲 Tiebreaker decided: {slot}. See you there!",
     "noResponses": "No responses received — no session scheduled for this week.",
     "dmUnavailable": "🎲 The DM has no available slots this week — session cancelled.",
-    "dmNoResponse": "⏳ The DM hasn't filled the form yet — holding off on picking a slot.",
-    "unparsedWinner": "⚠️ unparsed slot won '{slot}' — no calendar event was created. Please schedule it manually."
+    "dmNoResponse": "⏳ The DM hasn't filled the form yet — holding off on picking a slot."
   }
 }

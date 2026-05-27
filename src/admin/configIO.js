@@ -36,9 +36,9 @@ function setNestedValue(obj, dotPath, value) {
  * For plain fields the form uses name="googleForm.formId" (dot notation).
  * For slotMap rows: name="googleForm.playerSlotQuestions[0][questionId]" and
  *                   name="googleForm.playerSlotQuestions[0][slotLabel]"
- * For slotTimesMap: name="googleCalendar.slotTimes[0][slotLabel]",
- *                   name="googleCalendar.slotTimes[0][dayOfWeek]",
- *                   name="googleCalendar.slotTimes[0][time]"
+ * For slotTimesMap: name="sessionTimes.slotTimes[0][slotLabel]",
+ *                   name="sessionTimes.slotTimes[0][dayOfWeek]",
+ *                   name="sessionTimes.slotTimes[0][time]"
  *
  * Returns a plain config object suitable for validateConfig / JSON.stringify.
  *
@@ -135,25 +135,23 @@ const TIME_RE = /^\d{1,2}:\d{2}$/;
 function validateConfig(cfg, schema) {
   const errors = [];
 
-  // Determine whether the googleCalendar block is active (any field is set)
-  const calFields = schema.filter((f) => f.section === 'googleCalendar');
-  const calActive = calFields.some((f) => {
+  // Determine whether the sessionTimes block is active (any field is set)
+  const stFields = schema.filter((f) => f.section === 'sessionTimes');
+  const stActive = stFields.some((f) => {
     const v = getNestedValue(cfg, f.path);
-    if (f.type === 'slotTimesMap') return v != null && typeof v === 'object' && Object.keys(v).length > 0;
+    if (f.type === 'slotTimesMap' || f.type === 'slotMap') return v != null && typeof v === 'object' && Object.keys(v).length > 0;
     return v != null && v !== '';
   });
 
   for (const field of schema) {
     const value = getNestedValue(cfg, field.path);
-    const isCalField = field.section === 'googleCalendar';
+    const isStField = field.section === 'sessionTimes';
 
-    // Skip optional calendar fields when the whole block is absent
-    if (isCalField && !calActive) continue;
+    // Skip optional sessionTimes fields when the whole block is absent
+    if (isStField && !stActive) continue;
 
     // ── Required check ────────────────────────────────────────────────────────
-    // isCalField && calActive treats cal fields as required when the block is
-    // active, UNLESS the field is explicitly marked optional: true.
-    if (field.required || (isCalField && calActive && !field.optional)) {
+    if (field.required || (isStField && stActive && !field.optional)) {
       if (field.type === 'slotMap' || field.type === 'slotTimesMap') {
         if (value == null || typeof value !== 'object' || Object.keys(value).length === 0) {
           errors.push({ path: field.path, message: `${field.label}: at least one row is required.` });
@@ -333,16 +331,6 @@ function validateRuntimeConfig(cfg) {
   if (!cfg.adminPanel.passwordHash || String(cfg.adminPanel.passwordHash).startsWith('REPLACE')) {
     errors.push('config.adminPanel.passwordHash is not set. Run: node bin/hash-password.js <your-password>');
   }
-  if (cfg.googleCalendar) {
-    for (const k of ['calendarId', 'serviceAccountKeyPath']) {
-      if (cfg.googleCalendar[k] == null || String(cfg.googleCalendar[k]).startsWith('REPLACE')) {
-        errors.push(`config.googleCalendar.${k} is not set (remove the googleCalendar block to disable calendar events)`);
-      }
-    }
-    // slotTimes is now optional — Hebrew "<day> <time-keyword>" labels resolve via the
-    // built-in parser. slotTimes is only needed for overrides (e.g. שבת ערב → 18:00).
-  }
-
   return errors.length ? { ok: false, errors } : { ok: true, errors: [] };
 }
 

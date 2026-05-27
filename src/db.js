@@ -36,11 +36,6 @@ function migrate(db) {
       PRIMARY KEY (chat_id, message_id)
     );
   `);
-  try {
-    db.exec('ALTER TABLE poll_state ADD COLUMN calendar_event_link TEXT');
-  } catch (err) {
-    if (!err.message.includes('duplicate column name')) throw err;
-  }
 }
 
 function rowToState(row) {
@@ -56,7 +51,6 @@ function rowToState(row) {
     reminderSent: row.reminder_sent === 1,
     winnerSlot: row.winner_slot || null,
     tiebreakerWinnerAnnounced: row.tiebreaker_winner_announced === 1,
-    calendarEventLink: row.calendar_event_link || null,
   };
 }
 
@@ -89,9 +83,6 @@ function wrap(db) {
     ),
     setTiebreakerWinner: db.prepare(
       'UPDATE poll_state SET tiebreaker_winner_announced = 1, winner_slot = ? WHERE week_start = ?',
-    ),
-    setCalendarEventLink: db.prepare(
-      'UPDATE poll_state SET calendar_event_link = ? WHERE week_start = ?',
     ),
     allStates: db.prepare('SELECT * FROM poll_state ORDER BY week_start DESC LIMIT ?'),
   };
@@ -130,11 +121,6 @@ function wrap(db) {
     stmts.setTiebreakerWinner.run(slotLabel, weekStart);
   }
 
-  function setCalendarEventLink(weekStart, link) {
-    ensureState(weekStart);
-    stmts.setCalendarEventLink.run(link, weekStart);
-  }
-
   function addBotPinnedMessage(chatId, messageId) {
     stmts.addBotPinned.run(chatId, messageId);
   }
@@ -164,7 +150,6 @@ function wrap(db) {
     setWinner,
     setTiebreaker,
     setTiebreakerWinner,
-    setCalendarEventLink,
     addBotPinnedMessage,
     getBotPinnedMessages,
     removeBotPinnedMessage,

@@ -134,15 +134,15 @@ test('flattenForm: parses slotMap with multiple rows', () => {
 
 test('flattenForm: parses slotTimesMap correctly', () => {
   const body = {
-    'googleCalendar.slotTimes[0][slotLabel]': 'Thursday evening',
-    'googleCalendar.slotTimes[0][dayOfWeek]': 'thursday',
-    'googleCalendar.slotTimes[0][time]': '20:00',
-    'googleCalendar.slotTimes[1][slotLabel]': 'Friday morning',
-    'googleCalendar.slotTimes[1][dayOfWeek]': 'friday',
-    'googleCalendar.slotTimes[1][time]': '10:00',
+    'sessionTimes.slotTimes[0][slotLabel]': 'Thursday evening',
+    'sessionTimes.slotTimes[0][dayOfWeek]': 'thursday',
+    'sessionTimes.slotTimes[0][time]': '20:00',
+    'sessionTimes.slotTimes[1][slotLabel]': 'Friday morning',
+    'sessionTimes.slotTimes[1][dayOfWeek]': 'friday',
+    'sessionTimes.slotTimes[1][time]': '10:00',
   };
   const cfg = flattenForm(body, SCHEMA, {});
-  assert.deepEqual(cfg.googleCalendar.slotTimes, {
+  assert.deepEqual(cfg.sessionTimes.slotTimes, {
     'Thursday evening': { dayOfWeek: 'thursday', time: '20:00' },
     'Friday morning': { dayOfWeek: 'friday', time: '10:00' },
   });
@@ -218,47 +218,38 @@ test('validateConfig: error on duplicate slotMap question IDs', () => {
 
 test('validateConfig: error on invalid slotTimes dayOfWeek', () => {
   const cfg = makeValidConfig({
-    googleCalendar: {
-      calendarId: 'cal@group.calendar.google.com',
-      serviceAccountKeyPath: './sa.json',
-      eventTitle: 'D&D',
+    sessionTimes: {
       eventDurationHours: 5,
       slotTimes: { 'Thu evening': { dayOfWeek: 'badday', time: '20:00' } },
     },
   });
   const { ok, errors } = validateConfig(cfg, SCHEMA);
   assert.equal(ok, false);
-  assert.ok(errors.some((e) => e.path === 'googleCalendar.slotTimes'));
+  assert.ok(errors.some((e) => e.path === 'sessionTimes.slotTimes'));
 });
 
 test('validateConfig: error on invalid slotTimes time format', () => {
   const cfg = makeValidConfig({
-    googleCalendar: {
-      calendarId: 'cal@group.calendar.google.com',
-      serviceAccountKeyPath: './sa.json',
-      eventTitle: 'D&D',
+    sessionTimes: {
       eventDurationHours: 5,
       slotTimes: { 'Thu evening': { dayOfWeek: 'thursday', time: '8pm' } },
     },
   });
   const { ok, errors } = validateConfig(cfg, SCHEMA);
   assert.equal(ok, false);
-  assert.ok(errors.some((e) => e.path === 'googleCalendar.slotTimes'));
+  assert.ok(errors.some((e) => e.path === 'sessionTimes.slotTimes'));
 });
 
-test('validateConfig: skips googleCalendar fields when block is absent', () => {
+test('validateConfig: skips sessionTimes fields when block is absent', () => {
   const cfg = makeValidConfig();
-  delete cfg.googleCalendar;
+  delete cfg.sessionTimes;
   const { ok } = validateConfig(cfg, SCHEMA);
   assert.equal(ok, true);
 });
 
-test('validateConfig: validates googleCalendar fields when block is present', () => {
+test('validateConfig: validates sessionTimes fields when block is present', () => {
   const cfg = makeValidConfig({
-    googleCalendar: {
-      calendarId: 'cal@group.calendar.google.com',
-      serviceAccountKeyPath: './sa.json',
-      eventTitle: 'D&D',
+    sessionTimes: {
       eventDurationHours: 5,
       slotTimes: { 'Thu evening': { dayOfWeek: 'thursday', time: '20:00' } },
     },
@@ -296,15 +287,3 @@ test('validateRuntimeConfig: fails when adminPanel.passwordHash starts with REPL
   assert.ok(errors.some((e) => e.includes('passwordHash')));
 });
 
-test('validateRuntimeConfig: fails when googleCalendar block is present but calendarId not set', () => {
-  const cfg = makeValidConfig({
-    googleCalendar: {
-      calendarId: 'REPLACE_WITH_CALENDAR_ID',
-      serviceAccountKeyPath: './sa.json',
-      slotTimes: { 'Thu': { dayOfWeek: 'thursday', time: '20:00' } },
-    },
-  });
-  const { ok, errors } = validateRuntimeConfig(cfg);
-  assert.equal(ok, false);
-  assert.ok(errors.some((e) => e.includes('calendarId')));
-});

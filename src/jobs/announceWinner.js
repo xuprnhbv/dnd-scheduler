@@ -26,12 +26,6 @@ function renderTemplate(tpl, vars) {
   );
 }
 
-function appendCalendarLink(text, link) {
-  if (!link) return text;
-  if (text.includes('{calendarLink}')) return text.replace('{calendarLink}', link);
-  return `${text}\n📅 ${link}`;
-}
-
 function tallyCounts(playerResponses) {
   const yes = {};
   const maybe = {};
@@ -84,7 +78,7 @@ function applyDmFilter(counts, dmResponse) {
   };
 }
 
-async function run({ config, db, whatsapp, googleForm, googleCalendar, now = new Date() }) {
+async function run({ config, db, whatsapp, googleForm, now = new Date() }) {
   const weekStart = currentWeekStart(now, config.timezone);
   const state = db.getState(weekStart);
 
@@ -152,35 +146,11 @@ async function run({ config, db, whatsapp, googleForm, googleCalendar, now = new
 
   if (tied.length === 1) {
     const winner = tied[0];
-
-    // Reuse a calendar event from a prior attempt that crashed mid-flight,
-    // so retries don't create duplicate events on the same calendar.
-    let calendarLink = state.calendarEventLink || null;
-    let slotUnparsed = false;
-    if (googleCalendar && !calendarLink) {
-      const cal = await googleCalendar.createSessionEvent({ weekStart, slotLabel: winner, timezone: config.timezone });
-      if (cal.ok) {
-        calendarLink = cal.htmlLink;
-        db.setCalendarEventLink(weekStart, calendarLink);
-        logger.info(`[announceWinner] calendar event created: ${calendarLink}`);
-      } else {
-        logger.warn(`[announceWinner] calendar event skipped: ${cal.reason}`);
-        if (cal.reason === 'no-slot-mapping') slotUnparsed = true;
-      }
-    }
-
-    const raw = renderTemplate(config.messages.winner, { slot: winner, calendarLink: calendarLink || '' });
-    const text = appendCalendarLink(raw, calendarLink);
+    const text = renderTemplate(config.messages.winner, { slot: winner });
     const winnerMsg = await sendSessionAnnouncement({
       whatsapp, config, weekStart, slotLabel: winner, text,
     });
     await whatsapp.pinMessage(winnerMsg);
-    // Warn after the pin — so a transient failure of this follow-up doesn't block
-    // the winner announcement itself from being marked as done.
-    if (slotUnparsed && config.messages.unparsedWinner) {
-      const warnText = renderTemplate(config.messages.unparsedWinner, { slot: winner });
-      await whatsapp.sendText(config.groupId, warnText);
-    }
     // Mark announced only after the message actually went out; if sendSessionAnnouncement
     // throws (e.g. puppeteer "detached Frame"), the week stays unannounced and a retry
     // will re-send instead of being skipped by the idempotency check above.
