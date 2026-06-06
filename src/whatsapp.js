@@ -93,6 +93,7 @@ function createWhatsApp(db = null) {
   let ready = false;
   let readyResolvers = [];
   let destroyed = false; // set on intentional destroy() so reconnect loop stops
+  let initInFlight = null; // single-flight guard: the in-progress init() promise, if any
   let sessionLostNotified = false; // throttle the loud SESSION LOST error
   let lastReadyAt = null;
   let lastQrAt = null;
@@ -126,10 +127,24 @@ function createWhatsApp(db = null) {
     });
   }
 
+  // Single-flight wrapper around the real initialization. Multiple callers can
+  // request a reinit concurrently — the liveness probe, the `disconnected`
+  // handler, and every in-flight op that hits a transient error via
+  // withTransientRetry. Without this guard each caller would run _initOnce in
+  // parallel: one launches Chrome and locks the LocalAuth userDataDir, the rest
+  // throw "The browser is already running for .../.wwebjs_auth/session", and the
+  // client gets wedged in a permanent "initializing" state. Joining one shared
+  // promise means N concurrent failures trigger exactly one reinit.
+  function init(maxRetries = 3) {
+    if (initInFlight) return initInFlight;
+    initInFlight = _initOnce(maxRetries).finally(() => { initInFlight = null; });
+    return initInFlight;
+  }
+
   // Build a fresh Client, register all event listeners, and call initialize().
   // Retries on the "Execution context was destroyed" error which whatsapp-web.js
   // can surface when WhatsApp does an internal page navigation during startup.
-  async function init(maxRetries = 3) {
+  async function _initOnce(maxRetries = 3) {
     destroyed = false;
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
