@@ -3,12 +3,7 @@
 const { currentWeekStart } = require('../slots');
 const { findTopOptions, sendSessionAnnouncement } = require('./announceWinner');
 const logger = require('../logger');
-
-function renderTemplate(tpl, vars) {
-  return tpl.replace(/\{(\w+)\}/g, (_m, k) =>
-    Object.prototype.hasOwnProperty.call(vars, k) ? String(vars[k]) : `{${k}}`,
-  );
-}
+const { renderTemplate } = require('./jobUtils');
 
 async function run({ config, db, whatsapp, googleForm, now = new Date() }) {
   const weekStart = currentWeekStart(now, config.timezone);

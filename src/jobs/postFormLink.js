@@ -3,12 +3,7 @@
 const { DateTime } = require('luxon');
 const { currentWeekStart, weekRangeLabel } = require('../slots');
 const logger = require('../logger');
-
-function renderTemplate(tpl, vars) {
-  return tpl.replace(/\{(\w+)\}/g, (_m, k) =>
-    Object.prototype.hasOwnProperty.call(vars, k) ? String(vars[k]) : `{${k}}`,
-  );
-}
+const { renderTemplate } = require('./jobUtils');
 
 async function run({ config, db, whatsapp, googleForm, now = new Date() }) {
   const tz = config.timezone;

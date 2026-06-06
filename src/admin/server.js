@@ -229,14 +229,13 @@ function renderStageButtons(s) {
   const formSent = !!s.mainPollId;
   const reminderSent = !!s.reminderSent;
   const winnerStageDone = !!s.winnerAnnounced || !!s.tiebreakerPollId;
-  const hasTiebreaker = !!s.tiebreakerPollId;
   const tiebreakerDone = !!s.tiebreakerWinnerAnnounced;
 
   const stages = [
     { action: '/send-form',          label: '📨 Send form link',     enabled: !formSent },
     { action: '/send-reminder',      label: '🔔 Send reminder',      enabled: formSent && !reminderSent },
     { action: '/announce-winner',    label: '🏆 Announce winner',    enabled: reminderSent && !winnerStageDone },
-    { action: '/announce-tiebreaker', label: '⚖️ Announce tiebreaker', enabled: hasTiebreaker && !tiebreakerDone },
+    { action: '/announce-tiebreaker', label: '⚖️ Announce tiebreaker', enabled: !!s.tiebreakerPollId && !tiebreakerDone },
   ];
 
   const forms = stages.map((b) => {
@@ -373,24 +372,30 @@ function create({ config, db, whatsapp, googleForm }) {
 
   // ── Dashboard ──────────────────────────────────────────────────────────────
 
+  const SUCCESS_BANNERS = {
+    sent: '✓ Form link sent to the group.',
+    reminderSent: '✓ Reminder sent to the group.',
+    winnerAnnounced: '✓ Winner stage executed.',
+    tiebreakerAnnounced: '✓ Tiebreaker winner announced.',
+  };
+  const ERROR_BANNERS = {
+    'already-sent': 'Form link was already sent this week.',
+    'reminder-already-sent': 'Reminder was already sent this week.',
+    'reminder-no-form': 'Cannot send reminder — form link has not been sent yet.',
+    'winner-already-announced': 'Winner stage has already produced its WhatsApp message this week.',
+    'winner-no-reminder': 'Cannot announce winner — reminder has not been sent yet.',
+    'tiebreaker-already-announced': 'Tiebreaker winner was already announced this week.',
+    'tiebreaker-no-poll': 'Cannot announce tiebreaker — no tiebreaker poll was posted.',
+  };
+
   app.get('/', requireAuth, async (req, res) => {
     try {
       let banner = '';
-      if (req.query.sent) banner = '<div class="banner">✓ Form link sent to the group.</div>';
-      if (req.query.reminderSent) banner = '<div class="banner">✓ Reminder sent to the group.</div>';
-      if (req.query.winnerAnnounced) banner = '<div class="banner">✓ Winner stage executed.</div>';
-      if (req.query.tiebreakerAnnounced) banner = '<div class="banner">✓ Tiebreaker winner announced.</div>';
-      const errMessages = {
-        'already-sent': 'Form link was already sent this week.',
-        'reminder-already-sent': 'Reminder was already sent this week.',
-        'reminder-no-form': 'Cannot send reminder — form link has not been sent yet.',
-        'winner-already-announced': 'Winner stage has already produced its WhatsApp message this week.',
-        'winner-no-reminder': 'Cannot announce winner — reminder has not been sent yet.',
-        'tiebreaker-already-announced': 'Tiebreaker winner was already announced this week.',
-        'tiebreaker-no-poll': 'Cannot announce tiebreaker — no tiebreaker poll was posted.',
-      };
-      if (req.query.err && errMessages[req.query.err]) {
-        banner = `<div class="banner error">${errMessages[req.query.err]}</div>`;
+      const successKey = Object.keys(SUCCESS_BANNERS).find((k) => req.query[k]);
+      if (successKey) {
+        banner = `<div class="banner">${SUCCESS_BANNERS[successKey]}</div>`;
+      } else if (req.query.err && ERROR_BANNERS[req.query.err]) {
+        banner = `<div class="banner error">${ERROR_BANNERS[req.query.err]}</div>`;
       }
       const html = await renderPanel({ config, db, whatsapp, googleForm, banner });
       res.type('text/html').send(html);
@@ -418,65 +423,54 @@ function create({ config, db, whatsapp, googleForm }) {
     }
   });
 
-  app.post('/send-reminder', requireAuth, async (req, res) => {
-    try {
-      const now = new Date();
-      const weekStart = currentWeekStart(now, config.timezone);
-      const state = db.getState(weekStart);
-      if (!state || !state.mainPollId) {
-        return res.redirect('/?err=reminder-no-form');
+  // makeJobRoute: returns a POST handler that guards on state, runs a job, and redirects.
+  // preChecks is a fn(state) → [[condition, errParam], ...]; first truthy condition redirects.
+  function makeJobRoute(logName, preChecks, jobModule, redirectParam) {
+    return async (req, res) => {
+      try {
+        const state = db.getState(currentWeekStart(new Date(), config.timezone));
+        for (const [condition, errParam] of preChecks(state)) {
+          if (condition) return res.redirect(`/?err=${errParam}`);
+        }
+        logger.info(`admin manually triggering ${logName}`);
+        await jobModule.run({ config, db, whatsapp, googleForm });
+        return res.redirect(`/?${redirectParam}=1`);
+      } catch (err) {
+        logger.error(`admin ${logName} error:`, err);
+        return res.status(500).type('text/plain').send('Error: ' + escapeHtml(err.message));
       }
-      if (state.reminderSent) {
-        return res.redirect('/?err=reminder-already-sent');
-      }
-      logger.info('admin manually triggering sendReminder');
-      await sendReminder.run({ config, db, whatsapp, googleForm });
-      return res.redirect('/?reminderSent=1');
-    } catch (err) {
-      logger.error('admin send-reminder error:', err);
-      return res.status(500).type('text/plain').send('Error: ' + escapeHtml(err.message));
-    }
-  });
+    };
+  }
 
-  app.post('/announce-winner', requireAuth, async (req, res) => {
-    try {
-      const now = new Date();
-      const weekStart = currentWeekStart(now, config.timezone);
-      const state = db.getState(weekStart);
-      if (!state || !state.reminderSent) {
-        return res.redirect('/?err=winner-no-reminder');
-      }
-      if (state.winnerAnnounced || state.tiebreakerPollId) {
-        return res.redirect('/?err=winner-already-announced');
-      }
-      logger.info('admin manually triggering announceWinner');
-      await announceWinner.run({ config, db, whatsapp, googleForm });
-      return res.redirect('/?winnerAnnounced=1');
-    } catch (err) {
-      logger.error('admin announce-winner error:', err);
-      return res.status(500).type('text/plain').send('Error: ' + escapeHtml(err.message));
-    }
-  });
+  app.post('/send-reminder', requireAuth, makeJobRoute(
+    'sendReminder',
+    (s) => [
+      [!s || !s.mainPollId, 'reminder-no-form'],
+      [s && s.reminderSent, 'reminder-already-sent'],
+    ],
+    sendReminder,
+    'reminderSent',
+  ));
 
-  app.post('/announce-tiebreaker', requireAuth, async (req, res) => {
-    try {
-      const now = new Date();
-      const weekStart = currentWeekStart(now, config.timezone);
-      const state = db.getState(weekStart);
-      if (!state || !state.tiebreakerPollId) {
-        return res.redirect('/?err=tiebreaker-no-poll');
-      }
-      if (state.tiebreakerWinnerAnnounced) {
-        return res.redirect('/?err=tiebreaker-already-announced');
-      }
-      logger.info('admin manually triggering announceTiebreaker');
-      await announceTiebreaker.run({ config, db, whatsapp, googleForm });
-      return res.redirect('/?tiebreakerAnnounced=1');
-    } catch (err) {
-      logger.error('admin announce-tiebreaker error:', err);
-      return res.status(500).type('text/plain').send('Error: ' + escapeHtml(err.message));
-    }
-  });
+  app.post('/announce-winner', requireAuth, makeJobRoute(
+    'announceWinner',
+    (s) => [
+      [!s || !s.reminderSent, 'winner-no-reminder'],
+      [s && (s.winnerAnnounced || s.tiebreakerPollId), 'winner-already-announced'],
+    ],
+    announceWinner,
+    'winnerAnnounced',
+  ));
+
+  app.post('/announce-tiebreaker', requireAuth, makeJobRoute(
+    'announceTiebreaker',
+    (s) => [
+      [!s || !s.tiebreakerPollId, 'tiebreaker-no-poll'],
+      [s && s.tiebreakerWinnerAnnounced, 'tiebreaker-already-announced'],
+    ],
+    announceTiebreaker,
+    'tiebreakerAnnounced',
+  ));
 
   // ── Config editor ──────────────────────────────────────────────────────────
 
