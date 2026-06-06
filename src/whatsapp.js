@@ -179,7 +179,7 @@ function createWhatsApp(db = null) {
         // Also render a PNG for the admin dashboard so the operator does not
         // need SSH access to re-link the session.
         QRCode.toDataURL(qr, { width: 320, margin: 1 })
-          .then((url) => { currentQrDataUrl = url; })
+          .then((url) => { if (!ready) currentQrDataUrl = url; })
           .catch((err) => logger.warn('[whatsapp] QR PNG generation failed:', err.message));
       });
 

@@ -4,6 +4,7 @@ const { DateTime } = require('luxon');
 const { currentWeekStart } = require('../slots');
 const { resolveSlotRange } = require('../sessionTime');
 const logger = require('../logger');
+const { renderTemplate } = require('./jobUtils');
 
 const EVENT_TITLE_FORMAT = 'ccc, LLL d';
 
@@ -18,12 +19,6 @@ async function sendSessionAnnouncement({ whatsapp, config, weekStart, slotLabel,
     endTime: range.end.toJSDate(),
     description: text,
   });
-}
-
-function renderTemplate(tpl, vars) {
-  return tpl.replace(/\{(\w+)\}/g, (_m, k) =>
-    Object.prototype.hasOwnProperty.call(vars, k) ? String(vars[k]) : `{${k}}`,
-  );
 }
 
 function tallyCounts(playerResponses) {
