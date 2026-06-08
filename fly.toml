@@ -1,6 +1,11 @@
 app = "dnd-scheduler"
 primary_region = "fra"
 
+# Top-level (NOT under [[vm]], where Fly ignores it). Matches the droplet's 2 GB
+# swap — the safety net for Chrome's memory spikes during WhatsApp initial sync /
+# client reinit. Without this the 2 GB machine pins at 100% and thrashes.
+swap_size_mb = 2048
+
 [build]
   dockerfile = "Dockerfile"
 
@@ -18,9 +23,8 @@ primary_region = "fra"
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = 2048          # ~1.1 GB resident on the droplet; 1 GB OOMs on Chrome reinit
+  memory = 2048          # matches the droplet; relies on swap_size_mb for spikes
   cpus = 1
-  swap_size_mb = 512     # safety net for Chrome reinit spikes (droplet used swap too)
 
 # Single stateful machine — the WhatsApp linked-device session is single-holder,
 # so never run more than one and never overlap two during a deploy.
