@@ -1,4 +1,4 @@
-app = "dnd-poll-bot"
+app = "dnd-scheduler"
 primary_region = "fra"
 
 [build]
