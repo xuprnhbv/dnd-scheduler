@@ -1,0 +1,50 @@
+app = "dnd-poll-bot"
+primary_region = "fra"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  # config.timezone is the source of truth for cron scheduling; TZ just keeps
+  # log timestamps in local time.
+  TZ = "Asia/Jerusalem"
+  PUPPETEER_SKIP_CHROMIUM_DOWNLOAD = "1"
+
+# Persistent volume for all runtime state. Create once:
+#   fly volumes create dnd_data --size 3 --region fra
+[[mounts]]
+  source = "dnd_data"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = 2048          # ~1.1 GB resident on the droplet; 1 GB OOMs on Chrome reinit
+  cpus = 1
+  swap_size_mb = 512     # safety net for Chrome reinit spikes (droplet used swap too)
+
+# Single stateful machine — the WhatsApp linked-device session is single-holder,
+# so never run more than one and never overlap two during a deploy.
+[deploy]
+  strategy = "immediate"   # stop old machine before starting new one
+
+[[services]]
+  internal_port = 3000
+  protocol = "tcp"
+  auto_stop_machines = false
+  auto_start_machines = false
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+
+  # Admin panel 302s to /login when unauthed, so a TCP check is the robust
+  # liveness signal. Generous grace: WhatsApp auth + Chrome boot takes ~40s+.
+  [[services.tcp_checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "120s"
