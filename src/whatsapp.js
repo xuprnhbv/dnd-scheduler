@@ -78,6 +78,21 @@ function isTransientPuppeteerError(err) {
   return !!m && TRANSIENT_PATTERNS.some((p) => m.includes(p));
 }
 
+// Bound a raw Puppeteer call so it can't hang forever. The client is built
+// with `protocolTimeout: 0` (needed so the CDP timeout doesn't fire during
+// WhatsApp's multi-step startup navigation), which means an individual op
+// that stalls in the browser would otherwise never settle. The rejection
+// message is deliberately NOT a transient pattern, so callers treat a timeout
+// as an ordinary (non-fatal, no-reinit) failure rather than triggering a
+// retry/reinit storm.
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 function contactIdFromNumber(number) {
   const clean = String(number).replace(/[^0-9]/g, '');
   return `${clean}@c.us`;
@@ -298,7 +313,7 @@ function createWhatsApp(db = null) {
           try {
             const prevMsg = await getMessageById(chatId, prevId);
             if (prevMsg && typeof prevMsg.unpin === 'function') {
-              await prevMsg.unpin();
+              await withTimeout(prevMsg.unpin(), 30000, 'unpin');
               logger.info('[pinMessage] unpinned previous bot-pinned message', prevId);
             }
           } catch (err) {
@@ -310,7 +325,7 @@ function createWhatsApp(db = null) {
       }
 
       try {
-        await msg.pin(durationSecs);
+        await withTimeout(msg.pin(durationSecs), 30000, 'pin');
         logger.info('[pinMessage] message pinned for', durationSecs, 'seconds');
         if (db && chatId && msg.id._serialized) {
           db.addBotPinnedMessage(chatId, msg.id._serialized);
@@ -327,12 +342,12 @@ function createWhatsApp(db = null) {
     return withTransientRetry('getMessageById', async () => {
       await ensureReady();
       try {
-        const chat = await client.getChatById(chatId);
-        const msgs = await chat.fetchMessages({ limit: 200 });
+        const chat = await withTimeout(client.getChatById(chatId), 30000, 'getChatById');
+        const msgs = await withTimeout(chat.fetchMessages({ limit: 200 }), 30000, 'fetchMessages');
         const found = msgs.find((m) => m.id && m.id._serialized === msgId);
         if (found) return found;
         if (typeof client.getMessageById === 'function') {
-          return await client.getMessageById(msgId);
+          return await withTimeout(client.getMessageById(msgId), 30000, 'getMessageById');
         }
         return null;
       } catch (err) {
