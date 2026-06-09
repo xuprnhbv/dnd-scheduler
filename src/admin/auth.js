@@ -12,7 +12,10 @@ function sessionMiddleware(config) {
     cookie: {
       httpOnly: true,
       sameSite: 'lax',
-      secure: false, // HTTPS handled by reverse proxy
+      // Mark Secure whenever we serve HTTPS (the default). Only an explicit
+      // tls.enabled=false (e.g. TLS terminated by a reverse proxy in front of
+      // plain HTTP) disables it, so cookies still work over HTTP in that mode.
+      secure: !(config.adminPanel.tls && config.adminPanel.tls.enabled === false),
       maxAge: 7 * 24 * 60 * 60 * 1000,
     },
   });

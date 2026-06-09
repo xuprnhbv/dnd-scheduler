@@ -8,6 +8,7 @@
  *   number      — <input type="number">
  *   url         — <input type="url">
  *   password    — <input type="password"> with show-toggle; value preserved opaquely on save
+ *   checkbox    — <input type="checkbox">; stored as a boolean
  *   textarea    — <textarea>
  *   slotMap     — { questionId: slotLabel } table (2-col repeating rows)
  *   slotTimesMap— { slotLabel: { dayOfWeek, time } } table (3-col repeating rows)
@@ -198,6 +199,33 @@ const SCHEMA = [
     type: 'number',
     required: false,
     placeholder: '3000',
+  },
+  {
+    path: 'adminPanel.tls.enabled',
+    section: 'adminPanel',
+    label: 'Serve over HTTPS',
+    help: 'Serve the admin panel over HTTPS with a self-signed certificate (auto-generated on first run). Disable only if a reverse proxy terminates TLS in front of the bot.',
+    type: 'checkbox',
+    required: false,
+    default: true,
+  },
+  {
+    path: 'adminPanel.tls.certPath',
+    section: 'adminPanel',
+    label: 'TLS certificate path',
+    help: 'TLS certificate file (PEM). Auto-generated self-signed if missing. Drop your own cert here to override. Default: .tls/cert.pem',
+    type: 'string',
+    required: false,
+    placeholder: '.tls/cert.pem',
+  },
+  {
+    path: 'adminPanel.tls.keyPath',
+    section: 'adminPanel',
+    label: 'TLS private key path',
+    help: 'TLS private key file (PEM). Auto-generated alongside the cert if missing. Default: .tls/key.pem',
+    type: 'string',
+    required: false,
+    placeholder: '.tls/key.pem',
   },
   // passwordHash and sessionSecret are handled by dedicated sub-forms — not rendered as regular fields
   {
