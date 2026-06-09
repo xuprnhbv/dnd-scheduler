@@ -9,6 +9,7 @@ const { createWhatsApp } = require('./whatsapp');
 const { createGoogleForm } = require('./googleform');
 const scheduler = require('./scheduler');
 const adminServer = require('./admin/server');
+const { ensureCert } = require('./admin/tls');
 const { currentWeekStart } = require('./slots');
 
 const CONFIG_PATH = path.resolve(process.cwd(), 'config.json');
@@ -125,9 +126,18 @@ async function main() {
 
   const app = adminServer.create({ config, db, whatsapp, googleForm });
   const port = config.adminPanel.port || 3000;
-  app.listen(port, () => {
-    logger.info(`Admin panel listening on :${port}`);
-  });
+  const tlsCfg = config.adminPanel.tls || {};
+  const tlsEnabled = tlsCfg.enabled !== false; // default on
+  if (tlsEnabled) {
+    const { cert, key } = ensureCert({ certPath: tlsCfg.certPath, keyPath: tlsCfg.keyPath });
+    require('https').createServer({ cert, key }, app).listen(port, () => {
+      logger.info(`Admin panel listening on https://:${port}`);
+    });
+  } else {
+    app.listen(port, () => {
+      logger.info(`Admin panel listening on :${port}`);
+    });
+  }
 
   const weekStart = currentWeekStart(new Date(), config.timezone);
   const state = db.getState(weekStart);

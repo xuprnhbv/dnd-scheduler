@@ -15,6 +15,11 @@
   },
   "adminPanel": {
     "port": 3000,
+    "tls": {
+      "enabled": true,
+      "certPath": ".tls/cert.pem",
+      "keyPath": ".tls/key.pem"
+    },
     "passwordHash": "REPLACE_WITH_BCRYPT_HASH",
     "sessionSecret": "REPLACE_WITH_LONG_RANDOM_STRING"
   },

@@ -114,6 +114,15 @@ function renderField(field, cfg, fieldErrors) {
     return `<div class="field">${labelHtml}<div>${inputHtml}${errHtml}${helpHtml}</div></div>`;
   }
 
+  if (field.type === 'checkbox') {
+    // Fall back to the schema default when the field is absent from config, so
+    // an older config.json without this block reflects the runtime default.
+    const effective = val === undefined && field.default !== undefined ? field.default : val;
+    const checked = effective ? ' checked' : '';
+    inputHtml = `<input type="checkbox" id="f-${name}" name="${name}" value="1"${checked}/>`;
+    return `<div class="field">${labelHtml}<div>${inputHtml}${errHtml}${helpHtml}</div></div>`;
+  }
+
   if (field.type === 'password') {
     // Never echo back the current value — leave blank, keep current on save
     const pwId = `f-${name}`;

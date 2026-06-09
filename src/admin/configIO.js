@@ -89,6 +89,12 @@ function flattenForm(body, schema, current = {}) {
       continue;
     }
 
+    if (field.type === 'checkbox') {
+      // Unchecked checkboxes are not POSTed at all → absence means false.
+      setNestedValue(cfg, rawKey, body[rawKey] != null);
+      continue;
+    }
+
     const raw = body[rawKey];
     const strVal = Array.isArray(raw) ? raw[0] : (raw || '');
     const trimmed = strVal.trim();

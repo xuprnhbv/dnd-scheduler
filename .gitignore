@@ -7,5 +7,6 @@ state.db-journal
 state.db-wal
 state.db-shm
 config.json
+.tls/
 .env
 .DS_Store
