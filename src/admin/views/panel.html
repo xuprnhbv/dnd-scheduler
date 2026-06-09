@@ -25,6 +25,10 @@
     .kv div:nth-child(odd) { color: #888; }
     .locked { color: #f88; }
     .editable { color: #8f8; }
+    .loading { animation: pulse 1.2s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
+    .refresh-link { background:none;border:0;color:#8ac;cursor:pointer;font-size:12px;padding:0;text-decoration:underline; }
+    .refresh-link:disabled { color:#666;cursor:default;text-decoration:none; }
     header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
     header form { margin: 0; }
     a { color: #8ac; }
@@ -59,7 +63,9 @@
     </div>
 
     <div class="card">
-      <h2>Current week status</h2>
+      <h2>Current week status
+        <button type="button" id="refresh-btn" class="refresh-link" title="Re-read Google Form responses">↻ refresh</button>
+      </h2>
       <div class="kv">
         <div>Week of</div><div>{{CUR_WEEK}}</div>
         <div>Form link sent</div><div>{{CUR_ANNOUNCED}}</div>
@@ -73,5 +79,59 @@
       {{STAGE_BUTTONS}}
     </div>
   </div>
+
+  <script>
+    // The Responses / DM cells depend on a slow Google Forms read. We render
+    // the page instantly with a loading placeholder, then fill these in here so
+    // the dashboard is responsive instead of blocking on Google's API latency.
+    (function () {
+      var respCell = document.getElementById('responses-cell');
+      var dmCell = document.getElementById('dm-cell');
+      var btn = document.getElementById('refresh-btn');
+      if (!respCell && !dmCell) return; // no Google Form configured
+
+      function setLoading() {
+        if (respCell) { respCell.className = 'muted loading'; respCell.textContent = '⏳ Loading responses…'; }
+        if (dmCell)   { dmCell.className = 'muted loading'; dmCell.textContent = '⏳ Loading…'; }
+      }
+
+      function apply(data) {
+        if (respCell) {
+          respCell.className = '';
+          if (!data || data.available === false) {
+            respCell.className = 'locked';
+            respCell.textContent = '⚠️ Could not load (Google Forms unavailable)';
+          } else {
+            respCell.textContent = data.filledCount + ' / ' + data.playerCount;
+          }
+        }
+        if (dmCell) {
+          if (!data || data.available === false) {
+            dmCell.className = 'muted';
+            dmCell.textContent = '—';
+          } else if (data.dmResponded) {
+            dmCell.className = '';
+            dmCell.textContent = 'Yes';
+          } else {
+            dmCell.className = 'locked';
+            dmCell.textContent = 'Not yet';
+          }
+        }
+      }
+
+      function load(force) {
+        setLoading();
+        if (btn) btn.disabled = true;
+        fetch('/api/responses' + (force ? '?refresh=1' : ''), { headers: { Accept: 'application/json' } })
+          .then(function (r) { return r.ok ? r.json() : { available: false }; })
+          .then(apply)
+          .catch(function () { apply({ available: false }); })
+          .then(function () { if (btn) btn.disabled = false; });
+      }
+
+      if (btn) btn.addEventListener('click', function () { load(true); });
+      load(false);
+    })();
+  </script>
 </body>
 </html>

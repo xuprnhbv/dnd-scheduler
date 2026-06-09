@@ -162,7 +162,10 @@ function renderConfigForm(cfg, fieldErrors = {}, banner = '', changePwBanner = '
 
 // ─── Panel renderer ───────────────────────────────────────────────────────────
 
-async function buildPanelContext({ config, db, googleForm, now = new Date() }) {
+// buildPanelContext is intentionally synchronous and only touches local state
+// (SQLite + clock). The slow Google Forms read is fetched separately by the
+// browser via /api/responses so the dashboard HTML renders instantly.
+function buildPanelContext({ config, db, now = new Date() }) {
   const tz = config.timezone;
   const curWeek = currentWeekStart(now, tz);
   const nextWeek = nextPollWeekStart(now, tz);
@@ -176,27 +179,45 @@ async function buildPanelContext({ config, db, googleForm, now = new Date() }) {
     .set({ hour: 10, minute: 0 })
     .toFormat('EEE dd LLL yyyy, HH:mm ZZZZ');
 
-  let filledCount = null;
-  let dmResponded = null;
-  if (googleForm) {
-    try {
-      const { playerResponses, dmResponse } = await googleForm.readResponses();
-      filledCount = playerResponses.length;
-      dmResponded = !!dmResponse;
-    } catch (err) {
-      logger.warn('[admin] readResponses failed:', err.message);
-    }
-  }
-
   return {
     tz,
     curWeek,
     nextWeek,
     curState,
     nextPollTime,
-    filledCount,
-    dmResponded,
   };
+}
+
+// Short-lived in-memory cache for the Google Forms response read. Several
+// things hit this within seconds (page load → /api/responses, plus manual
+// refreshes), and each underlying read is 2+ round-trips to Google. A small
+// TTL keeps the dashboard feeling instant without showing stale data for long.
+const RESPONSES_TTL_MS = 15 * 1000;
+let _responsesCache = { at: 0, value: null };
+
+async function fetchResponseStats({ config, googleForm, force = false }) {
+  if (!googleForm) {
+    return { available: false, filledCount: null, dmResponded: null, playerCount: 0 };
+  }
+  const now = Date.now();
+  if (!force && _responsesCache.value && now - _responsesCache.at < RESPONSES_TTL_MS) {
+    return _responsesCache.value;
+  }
+  const playerCount = Number(config.playerCount) || 0;
+  try {
+    const { playerResponses, dmResponse } = await googleForm.readResponses();
+    const value = {
+      available: true,
+      filledCount: playerResponses.length,
+      dmResponded: !!dmResponse,
+      playerCount,
+    };
+    _responsesCache = { at: now, value };
+    return value;
+  } catch (err) {
+    logger.warn('[admin] readResponses failed:', err.message);
+    return { available: false, error: err.message, filledCount: null, dmResponded: null, playerCount };
+  }
 }
 
 function renderWhatsappStatus(whatsapp) {
@@ -246,17 +267,19 @@ function renderStageButtons(s) {
   return `<div class="stage-buttons">${forms}</div>`;
 }
 
-async function renderPanel({ config, db, whatsapp, googleForm, banner = '', now = new Date() }) {
-  const ctx = await buildPanelContext({ config, db, googleForm, now });
-  const playerCount = Number(config.playerCount) || 0;
+function renderPanel({ config, db, whatsapp, banner = '', now = new Date() }) {
+  const ctx = buildPanelContext({ config, db, now });
   const formUrl = (config.googleForm && config.googleForm.publicUrl) || '';
 
-  const responsesCell = ctx.filledCount == null
-    ? '<span class="muted">—</span>'
-    : `${escapeHtml(ctx.filledCount)} / ${escapeHtml(playerCount)}`;
-  const dmCell = ctx.dmResponded == null
-    ? '<span class="muted">—</span>'
-    : (ctx.dmResponded ? 'Yes' : '<span class="locked">Not yet</span>');
+  // These two cells depend on the slow Google Forms read. Render a loading
+  // placeholder; the browser fills them in via /api/responses after paint.
+  const hasGoogleForm = !!(config.googleForm && config.googleForm.formId);
+  const responsesCell = hasGoogleForm
+    ? '<span id="responses-cell" class="muted loading">⏳ Loading responses…</span>'
+    : '<span class="muted">—</span>';
+  const dmCell = hasGoogleForm
+    ? '<span id="dm-cell" class="muted loading">⏳ Loading…</span>'
+    : '<span class="muted">—</span>';
 
   // While the session is lost, the QR refreshes ~every 20 s. Auto-reload
   // the dashboard so the user always sees a fresh, scannable code.
@@ -397,11 +420,27 @@ function create({ config, db, whatsapp, googleForm }) {
       } else if (req.query.err && ERROR_BANNERS[req.query.err]) {
         banner = `<div class="banner error">${ERROR_BANNERS[req.query.err]}</div>`;
       }
-      const html = await renderPanel({ config, db, whatsapp, googleForm, banner });
+      const html = renderPanel({ config, db, whatsapp, banner });
       res.type('text/html').send(html);
     } catch (err) {
       logger.error('panel render error:', err);
       res.status(500).type('text/plain').send('Internal error');
+    }
+  });
+
+  // Async data for the dashboard: the Google Forms response read lives here so
+  // the page can paint immediately and fill these cells in afterward.
+  app.get('/api/responses', requireAuth, async (req, res) => {
+    try {
+      const stats = await fetchResponseStats({
+        config,
+        googleForm,
+        force: !!req.query.refresh,
+      });
+      res.json(stats);
+    } catch (err) {
+      logger.error('api/responses error:', err);
+      res.status(500).json({ available: false, error: 'internal error' });
     }
   });
 
