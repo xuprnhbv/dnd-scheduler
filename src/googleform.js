@@ -33,6 +33,7 @@ function createGoogleForm(formConfig) {
     dmSlotQuestions,      // legacy { questionId: slotLabel }; used only when dmSlotItemId is unset
     playerSlotItemId,     // itemId of the player-availability grid item — rows auto-discovered via Forms API
     dmSlotItemId,         // itemId of the DM-availability grid item — rows auto-discovered via Forms API
+    attendanceItemId,     // itemId of the "can I meet this week?" yes/no question — used to count who answered
     unavailableAnswer,
     maybeAnswer,
     deleteWebhookUrl,
@@ -62,8 +63,8 @@ function createGoogleForm(formConfig) {
   // isn't configured, fall back to the legacy { questionId: slotLabel } map.
   // Newly-added grid rows in Google Forms are picked up automatically on each call.
   async function loadGridMaps() {
-    if (!playerSlotItemId && !dmSlotItemId) {
-      return { playerMap: playerSlotQuestions || {}, dmMap: dmSlotQuestions || {} };
+    if (!playerSlotItemId && !dmSlotItemId && !attendanceItemId) {
+      return { playerMap: playerSlotQuestions || {}, dmMap: dmSlotQuestions || {}, attendanceQuestionId: null };
     }
     const res = await forms.forms.get({ formId });
     const items = (res.data && res.data.items) || [];
@@ -79,11 +80,20 @@ function createGoogleForm(formConfig) {
       }
       return out;
     }
+    // A plain (non-grid) question item — e.g. the yes/no "can I meet this week?"
+    // question — carries its questionId directly on questionItem.question.
+    function questionIdForItem(itemId) {
+      if (!itemId) return null;
+      const item = items.find((i) => i.itemId === itemId);
+      if (!item || !item.questionItem || !item.questionItem.question) return null;
+      return item.questionItem.question.questionId || null;
+    }
     const playerMap = playerSlotItemId ? mapForItem(playerSlotItemId) : null;
     const dmMap = dmSlotItemId ? mapForItem(dmSlotItemId) : null;
     return {
       playerMap: playerMap || playerSlotQuestions || {},
       dmMap: dmMap || dmSlotQuestions || {},
+      attendanceQuestionId: questionIdForItem(attendanceItemId),
     };
   }
 
@@ -121,7 +131,7 @@ function createGoogleForm(formConfig) {
     return { yes, maybe };
   }
 
-  // Returns { playerResponses, dmResponse, rawCount }
+  // Returns { playerResponses, dmResponse, rawCount, attendanceCount, hasAttendance }
   //   playerResponses: Array<{ yes: string[], maybe: string[] }>
   //                                       — each entry = the slot labels this
   //                                       player marked "can play" (yes) and
@@ -132,8 +142,15 @@ function createGoogleForm(formConfig) {
   //                                       null if no DM response yet.
   //                                       Most-recent DM response wins if >1.
   //   rawCount:        number           — total responses in the form.
+  //   attendanceCount: number           — responses that answered the
+  //                                       "can I meet this week?" question
+  //                                       (either yes or no). 0 when no
+  //                                       attendanceItemId is configured.
+  //   hasAttendance:   boolean          — whether attendanceItemId resolved to
+  //                                       a real question (i.e. attendanceCount
+  //                                       is meaningful).
   async function readResponses() {
-    const { playerMap, dmMap } = await loadGridMaps();
+    const { playerMap, dmMap, attendanceQuestionId } = await loadGridMaps();
 
     let responses = [];
     let pageToken;
@@ -146,12 +163,22 @@ function createGoogleForm(formConfig) {
     const playerResponses = [];
     let dmResponse = null;
     let dmResponseTime = 0;
+    let attendanceCount = 0;
 
     for (const r of responses) {
       const playerSlots = slotsFromGridAnswers(r, playerMap);
       if (playerSlots !== null) playerResponses.push(playerSlots);
 
       const dmSlots = slotsFromGridAnswers(r, dmMap);
+
+      // Count players who answered the "can I meet this week?" question, whether
+      // they said yes (and filled the grid) or no (and didn't). The DM answers
+      // this same question with a third "I'm the DM" option, so exclude any
+      // response that also filled the DM grid — those are the DM, not a player.
+      if (attendanceQuestionId && r.answers && r.answers[attendanceQuestionId] && dmSlots === null) {
+        attendanceCount++;
+      }
+
       if (dmSlots !== null) {
         const t = Date.parse(r.lastSubmittedTime || r.createTime || 0) || 0;
         if (t >= dmResponseTime) {
@@ -162,7 +189,13 @@ function createGoogleForm(formConfig) {
       }
     }
 
-    return { playerResponses, dmResponse, rawCount: responses.length };
+    return {
+      playerResponses,
+      dmResponse,
+      rawCount: responses.length,
+      attendanceCount,
+      hasAttendance: !!attendanceQuestionId,
+    };
   }
 
   // POSTs the configured shared secret to the Apps Script webhook bound to the

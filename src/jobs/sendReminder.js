@@ -17,8 +17,11 @@ async function run({ config, db, whatsapp, googleForm, now = new Date() }) {
     return { skipped: true, reason: 'already-sent' };
   }
 
-  const { playerResponses, dmResponse } = await googleForm.readResponses();
-  const filledCount = playerResponses.length;
+  const { playerResponses, dmResponse, attendanceCount, hasAttendance } = await googleForm.readResponses();
+  // Count everyone who answered the "can I meet this week?" question (yes or no),
+  // not just those who filled the availability grid. Fall back to grid responses
+  // when no attendance question is configured.
+  const filledCount = hasAttendance ? attendanceCount : playerResponses.length;
   const playerCount = Number(config.playerCount) || 0;
 
   if (playerCount > 0 && filledCount >= playerCount) {

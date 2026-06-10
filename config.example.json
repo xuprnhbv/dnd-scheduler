@@ -8,6 +8,7 @@
     "serviceAccountKeyPath": "./service-account.json",
     "playerSlotItemId": "REPLACE_WITH_PLAYER_GRID_ITEM_ID",
     "dmSlotItemId": "REPLACE_WITH_DM_GRID_ITEM_ID",
+    "attendanceItemId": "REPLACE_WITH_CAN_MEET_QUESTION_ITEM_ID",
     "unavailableAnswer": "REPLACE_WITH_CANNOT_PLAY_OPTION_TEXT",
     "maybeAnswer": "REPLACE_WITH_MIGHT_COME_OPTION_TEXT",
     "deleteWebhookUrl": "REPLACE_WITH_APPS_SCRIPT_WEB_APP_URL",
