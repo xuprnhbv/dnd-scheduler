@@ -103,6 +103,14 @@ function numberFromContactId(id) {
   return String(id).split('@')[0];
 }
 
+// Compares two serialized message ids, tolerating the trailing "_<participant>@lid"
+// suffix that newer whatsapp-web.js versions sometimes append to (or omit from)
+// the id depending on whether it was returned by sendMessage or fetchMessages.
+function serializedIdsMatch(a, b) {
+  if (a === b) return true;
+  return a.startsWith(`${b}_`) || b.startsWith(`${a}_`);
+}
+
 function createWhatsApp(db = null) {
   let client = null;
   let ready = false;
@@ -344,7 +352,7 @@ function createWhatsApp(db = null) {
       try {
         const chat = await withTimeout(client.getChatById(chatId), 30000, 'getChatById');
         const msgs = await withTimeout(chat.fetchMessages({ limit: 200 }), 30000, 'fetchMessages');
-        const found = msgs.find((m) => m.id && m.id._serialized === msgId);
+        const found = msgs.find((m) => m.id && m.id._serialized && serializedIdsMatch(m.id._serialized, msgId));
         if (found) return found;
         if (typeof client.getMessageById === 'function') {
           return await withTimeout(client.getMessageById(msgId), 30000, 'getMessageById');
