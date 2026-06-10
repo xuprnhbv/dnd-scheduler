@@ -131,6 +131,15 @@ const SCHEMA = [
     placeholder: '87654321',
   },
   {
+    path: 'googleForm.attendanceItemId',
+    section: 'googleForm',
+    label: 'Attendance question item ID',
+    help: 'Item ID of the "can I meet this week?" yes/no question. When set, the reminder counts everyone who answered it (yes or no), not just those who filled the availability grid. Leave empty to count grid responses only.',
+    type: 'string',
+    required: false,
+    placeholder: '24681012',
+  },
+  {
     path: 'googleForm.playerSlotQuestions',
     section: 'googleForm',
     label: 'Player slot questions (legacy)',

@@ -214,10 +214,10 @@ async function fetchResponseStats({ config, googleForm, force = false }) {
   }
   const playerCount = Number(config.playerCount) || 0;
   try {
-    const { playerResponses, dmResponse } = await googleForm.readResponses();
+    const { playerResponses, dmResponse, attendanceCount, hasAttendance } = await googleForm.readResponses();
     const value = {
       available: true,
-      filledCount: playerResponses.length,
+      filledCount: hasAttendance ? attendanceCount : playerResponses.length,
       dmResponded: !!dmResponse,
       playerCount,
     };

@@ -32,6 +32,7 @@ async function main() {
   const items = res.data.items || [];
   for (const item of items) {
     const title = item.title || '(no title)';
+    const itemId = item.itemId;
 
     // ── Plain single question ────────────────────────────────────────────────
     const q = item.questionItem && item.questionItem.question;
@@ -52,6 +53,7 @@ async function main() {
         kind = 'TIME';
       }
       console.log(`• ${title}`);
+      console.log(`    itemId:     ${itemId}`);
       console.log(`    questionId: ${qid}`);
       console.log(`    type:       ${kind}`);
       if (options.length) console.log(`    options:    ${options.join(' | ')}`);
@@ -66,6 +68,7 @@ async function main() {
       const colOptions = (grp.grid && grp.grid.columns && grp.grid.columns.options || [])
         .map((o) => o.value);
       console.log(`• ${title}  [GRID / ${gridType}]`);
+      console.log(`    itemId:  ${itemId}`);
       console.log(`    columns: ${colOptions.join(' | ')}`);
       for (const rowQ of (grp.questions || [])) {
         const rowTitle = (rowQ.rowQuestion && rowQ.rowQuestion.title) || '(row)';
