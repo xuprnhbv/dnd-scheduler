@@ -129,7 +129,7 @@ function serializedIdsMatch(a, b) {
   return a.startsWith(`${b}_`) || b.startsWith(`${a}_`);
 }
 
-function createWhatsApp(db = null) {
+function createWhatsApp(db = null, notifier = null) {
   let client = null;
   let ready = false;
   let readyResolvers = [];
@@ -234,6 +234,13 @@ function createWhatsApp(db = null) {
             'is also rendered on the admin dashboard.',
           );
           sessionLostNotified = true;
+          // Fire-and-forget push so the operator is alerted off-dashboard. Gated
+          // by sessionLostNotified, so it fires exactly once per session-loss
+          // event; no-ops when notifications aren't configured.
+          if (notifier) {
+            Promise.resolve(notifier.sessionExpired())
+              .catch((err) => logger.warn('[whatsapp] session-expiry notify failed:', err.message));
+          }
         }
         logger.info('WhatsApp QR code — scan with your phone:');
         qrcode.generate(qr, { small: true });
