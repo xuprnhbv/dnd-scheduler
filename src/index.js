@@ -5,7 +5,7 @@ const path = require('path');
 
 const logger = require('./logger');
 const dbLib = require('./db');
-const { createWhatsApp } = require('./whatsapp');
+const { createWhatsApp, withTimeout } = require('./whatsapp');
 const { createGoogleForm } = require('./googleform');
 const scheduler = require('./scheduler');
 const adminServer = require('./admin/server');
@@ -100,20 +100,35 @@ async function main() {
   // consecutive failures. A single getState() error is common (puppeteer
   // mid-navigation, transient timeout) and reinit gambles with the
   // session — repeated reinits eventually lose auth and force a QR scan.
+  // A probe that resolves to a non-CONNECTED state (null, UNPAIRED, ...)
+  // counts as a failure too, and each probe is timeout-bounded so a hung
+  // CDP call can't pile up dangling probes (the client runs with
+  // protocolTimeout: 0).
   const LIVENESS_INTERVAL_MS = 5 * 60 * 1000;
   const LIVENESS_FAILURE_THRESHOLD = 4;
+  const LIVENESS_PROBE_TIMEOUT_MS = 30 * 1000;
   let livenessFailures = 0;
   const livenessHandle = setInterval(async () => {
     if (!whatsapp.ready) return;
+    let failureReason = null;
     try {
-      const state = await whatsapp.client.getState();
-      if (livenessFailures > 0) {
-        logger.info(`[liveness] probe recovered after ${livenessFailures} failure(s) (state=${state})`);
+      const state = await withTimeout(
+        whatsapp.client.getState(), LIVENESS_PROBE_TIMEOUT_MS, 'liveness getState',
+      );
+      if (state === 'CONNECTED') {
+        if (livenessFailures > 0) {
+          logger.info(`[liveness] probe recovered after ${livenessFailures} failure(s) (state=${state})`);
+        }
+        livenessFailures = 0;
+      } else {
+        failureReason = `state=${state}`;
       }
-      livenessFailures = 0;
     } catch (err) {
+      failureReason = err.message;
+    }
+    if (failureReason) {
       livenessFailures += 1;
-      logger.warn(`[liveness] probe failed (${livenessFailures}/${LIVENESS_FAILURE_THRESHOLD}): ${err.message}`);
+      logger.warn(`[liveness] probe failed (${livenessFailures}/${LIVENESS_FAILURE_THRESHOLD}): ${failureReason}`);
       if (livenessFailures >= LIVENESS_FAILURE_THRESHOLD) {
         logger.warn('[liveness] failure threshold reached — forcing reinit');
         livenessFailures = 0;

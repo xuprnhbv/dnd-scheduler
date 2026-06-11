@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('fs');
+const path = require('path');
 const { Client, LocalAuth, Poll, ScheduledEvent } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode');
@@ -93,6 +94,23 @@ function withTimeout(promise, ms, label) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+const AUTH_DATA_PATH = './.wwebjs_auth';
+// LocalAuth (no clientId) stores the Chrome profile under <dataPath>/session.
+const SESSION_PROFILE_DIR = path.join(AUTH_DATA_PATH, 'session');
+
+// Remove stale Chrome singleton lock files left behind by a dirty exit
+// (OOM kill, SIGKILL'd teardown). A stale SingletonLock makes the next
+// Chrome launch hang or fail with "The browser is already running".
+// Only called between teardown and the next launch, when init()'s
+// single-flight guard guarantees nothing of ours is using the profile.
+function clearStaleSingletonLocks() {
+  for (const name of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+    try {
+      fs.rmSync(path.join(SESSION_PROFILE_DIR, name), { force: true });
+    } catch (_) { /* best-effort */ }
+  }
+}
+
 function contactIdFromNumber(number) {
   const clean = String(number).replace(/[^0-9]/g, '');
   return `${clean}@c.us`;
@@ -164,6 +182,28 @@ function createWhatsApp(db = null) {
     return initInFlight;
   }
 
+  // Tear down the current client without letting a wedged browser hang us.
+  // client.destroy() can stall forever (the client runs with protocolTimeout: 0),
+  // and a leaked Chrome process keeps the LocalAuth profile locked so the next
+  // launch fails with "The browser is already running" — which is how reinit
+  // storms (and eventually lost auth) start. Bound destroy(), then force-kill
+  // the browser process if it didn't go quietly.
+  async function teardownClient() {
+    if (!client) return;
+    const old = client;
+    client = null;
+    ready = false;
+    try {
+      await withTimeout(old.destroy(), 60000, 'client.destroy');
+    } catch (err) {
+      logger.warn(`[whatsapp] client.destroy failed (${err.message}); force-killing browser process`);
+      try {
+        const proc = old.pupBrowser && old.pupBrowser.process && old.pupBrowser.process();
+        if (proc && !proc.killed) proc.kill('SIGKILL');
+      } catch (_) { /* best-effort */ }
+    }
+  }
+
   // Build a fresh Client, register all event listeners, and call initialize().
   // Retries on the "Execution context was destroyed" error which whatsapp-web.js
   // can surface when WhatsApp does an internal page navigation during startup.
@@ -171,15 +211,13 @@ function createWhatsApp(db = null) {
     destroyed = false;
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      // Destroy any previous instance before creating a new one.
-      if (client) {
-        try { await client.destroy(); } catch (_) { /* ignore */ }
-        client = null;
-      }
-      ready = false;
+      // Destroy any previous instance before creating a new one, and clear
+      // any singleton locks a dirty exit left in the profile dir.
+      await teardownClient();
+      clearStaleSingletonLocks();
 
       client = new Client({
-        authStrategy: new LocalAuth({ dataPath: './.wwebjs_auth' }),
+        authStrategy: new LocalAuth({ dataPath: AUTH_DATA_PATH }),
         puppeteer: buildPuppeteerConfig(),
       });
 
@@ -255,6 +293,33 @@ function createWhatsApp(db = null) {
     if (!ready) await waitForReady();
   }
 
+  // Pre-job health check: verify the underlying browser is actually alive
+  // shortly before a scheduled send, so any reinit cost (~1-2 min) is paid
+  // now instead of mid-job. A single getState() failure is common (transient
+  // CDP hiccup) and a reinit gambles with the session, so only reinit after
+  // two consecutive bad probes.
+  async function warmup() {
+    if (!ready) {
+      logger.info('[warmup] client not ready — initializing');
+      await init();
+      return { reinit: true, reason: 'not-ready' };
+    }
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const state = await withTimeout(client.getState(), 30000, 'getState');
+        if (state === 'CONNECTED') return { reinit: false, state };
+        logger.warn(`[warmup] getState returned ${state} (attempt ${attempt}/2)`);
+      } catch (err) {
+        logger.warn(`[warmup] getState failed (attempt ${attempt}/2): ${err.message}`);
+      }
+      if (attempt < 2) await new Promise((r) => setTimeout(r, 15000));
+    }
+    logger.warn('[warmup] client unhealthy — forcing reinit before the upcoming job');
+    ready = false;
+    await init();
+    return { reinit: true, reason: 'unhealthy' };
+  }
+
   // Run a WhatsApp operation, and if it fails with a transient Puppeteer
   // error (e.g. "Attempted to use detached Frame"), reinitialize the
   // client once and retry. ensureReady() lives inside `fn` so that the
@@ -274,10 +339,17 @@ function createWhatsApp(db = null) {
     }
   }
 
+  // Sends are bounded so a wedged browser fails the job fast (and visibly)
+  // instead of hanging it forever. The timeout error is deliberately NOT a
+  // transient pattern: if the send actually landed but the ack stalled, a
+  // reinit-and-resend would duplicate the message. Recovery comes from the
+  // liveness probe healing the client and the scheduler retrying the job.
+  const SEND_TIMEOUT_MS = 120000;
+
   async function sendText(chatId, text, options = {}) {
     return withTransientRetry('sendText', async () => {
       await ensureReady();
-      return client.sendMessage(chatId, text, options);
+      return withTimeout(client.sendMessage(chatId, text, options), SEND_TIMEOUT_MS, 'sendText');
     });
   }
 
@@ -285,7 +357,7 @@ function createWhatsApp(db = null) {
     return withTransientRetry('sendPoll', async () => {
       await ensureReady();
       const poll = new Poll(question, options, { allowMultipleAnswers });
-      return client.sendMessage(chatId, poll);
+      return withTimeout(client.sendMessage(chatId, poll), SEND_TIMEOUT_MS, 'sendPoll');
     });
   }
 
@@ -297,7 +369,7 @@ function createWhatsApp(db = null) {
         description,
         callType: 'none',
       });
-      return client.sendMessage(chatId, event);
+      return withTimeout(client.sendMessage(chatId, event), SEND_TIMEOUT_MS, 'sendEvent');
     });
   }
 
@@ -346,18 +418,26 @@ function createWhatsApp(db = null) {
   }
 
   // Fetch a message by chatId + serialized message id. Returns null if missing.
+  // Fast path first: direct store lookup by id. Falls back to scanning recent
+  // chat history, which tolerates the trailing "_<participant>@lid" suffix
+  // mismatch between stored and fetched ids (see serializedIdsMatch).
   async function getMessageById(chatId, msgId) {
     return withTransientRetry('getMessageById', async () => {
       await ensureReady();
+      if (typeof client.getMessageById === 'function') {
+        try {
+          const direct = await withTimeout(client.getMessageById(msgId), 30000, 'getMessageById');
+          if (direct) return direct;
+        } catch (err) {
+          if (isTransientPuppeteerError(err)) throw err;
+          logger.debug('getMessageById direct lookup missed, falling back to scan:', err.message);
+        }
+      }
       try {
         const chat = await withTimeout(client.getChatById(chatId), 30000, 'getChatById');
         const msgs = await withTimeout(chat.fetchMessages({ limit: 200 }), 30000, 'fetchMessages');
         const found = msgs.find((m) => m.id && m.id._serialized && serializedIdsMatch(m.id._serialized, msgId));
-        if (found) return found;
-        if (typeof client.getMessageById === 'function') {
-          return await withTimeout(client.getMessageById(msgId), 30000, 'getMessageById');
-        }
-        return null;
+        return found || null;
       } catch (err) {
         if (isTransientPuppeteerError(err)) throw err;
         logger.warn('getMessageById error:', err.message);
@@ -431,7 +511,7 @@ function createWhatsApp(db = null) {
   async function getGroupParticipantNumbers(groupId) {
     return withTransientRetry('getGroupParticipantNumbers', async () => {
       await ensureReady();
-      const chat = await client.getChatById(groupId);
+      const chat = await withTimeout(client.getChatById(groupId), 30000, 'getChatById');
       if (!chat.isGroup) throw new Error(`Chat ${groupId} is not a group`);
       const participants = chat.participants || [];
       return participants.map((p) => numberFromContactId(p.id && p.id._serialized));
@@ -447,15 +527,14 @@ function createWhatsApp(db = null) {
 
   async function destroy() {
     destroyed = true;
-    if (client) {
-      try { await client.destroy(); } catch (_) { /* ignore */ }
-    }
+    await teardownClient();
   }
 
   return {
     init,
     ensureReady,
     waitForReady,
+    warmup,
     sendText,
     sendPoll,
     sendEvent,
@@ -484,5 +563,6 @@ module.exports = {
   contactIdFromNumber,
   numberFromContactId,
   isTransientPuppeteerError,
+  withTimeout,
   TRANSIENT_PATTERNS,
 };
