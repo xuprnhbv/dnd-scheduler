@@ -7,6 +7,7 @@ const logger = require('./logger');
 const dbLib = require('./db');
 const { createWhatsApp, withTimeout } = require('./whatsapp');
 const { createGoogleForm } = require('./googleform');
+const { createNotifier } = require('./notifier');
 const scheduler = require('./scheduler');
 const adminServer = require('./admin/server');
 const { ensureCert } = require('./admin/tls');
@@ -66,11 +67,12 @@ async function main() {
   const config = loadConfig();
   const db = dbLib.open();
   const googleForm = createGoogleForm(config.googleForm);
+  const notifier = createNotifier(config);
 
-  const whatsapp = createWhatsApp(db);
+  const whatsapp = createWhatsApp(db, notifier);
   await whatsapp.init();
 
-  const ctx = { config, db, whatsapp, googleForm };
+  const ctx = { config, db, whatsapp, googleForm, notifier };
 
   if (args.test) {
     // --test mode still blocks on ready — the test job needs WhatsApp.
@@ -139,7 +141,7 @@ async function main() {
   }, LIVENESS_INTERVAL_MS);
   livenessHandle.unref();
 
-  const app = adminServer.create({ config, db, whatsapp, googleForm });
+  const app = adminServer.create({ config, db, whatsapp, googleForm, notifier });
   const port = config.adminPanel.port || 3000;
   const tlsCfg = config.adminPanel.tls || {};
   const tlsEnabled = tlsCfg.enabled !== false; // default on

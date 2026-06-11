@@ -255,6 +255,58 @@ function renderWhatsappStatus(whatsapp) {
   return '<span style="color:#fc8">⏳ Initializing…</span>';
 }
 
+function renderNotifications(config) {
+  const ntfy = (config.notifications && config.notifications.ntfy) || {};
+  const configured = !!(ntfy.enabled && ntfy.topic);
+
+  if (configured) {
+    const server = ntfy.server || 'https://ntfy.sh';
+    return `<div class="kv">
+        <div>Status</div><div><span style="color:#8f8">✅ Enabled</span></div>
+        <div>Server</div><div>${escapeHtml(server)}</div>
+        <div>Topic</div><div><code>${escapeHtml(ntfy.topic)}</code></div>
+      </div>
+      <div class="muted" style="margin-top:8px">
+        Subscribe to this topic in the ntfy app
+        (<a href="${escapeHtml(server)}" target="_blank" rel="noopener">${escapeHtml(server)}</a>)
+        to receive alerts when the WhatsApp session needs re-linking.
+      </div>
+      <div class="stage-buttons">
+        <form method="post" action="/notifications/test"><button type="submit" class="btn">🔔 Send test notification</button></form>
+        <form method="post" action="/notifications/disable"><button type="submit" class="btn secondary">Disable</button></form>
+      </div>`;
+  }
+
+  return `<div class="muted">
+      Get a push notification on your phone when the WhatsApp session needs re-linking.
+      Install the <a href="https://ntfy.sh" target="_blank" rel="noopener">ntfy</a> app, then
+      register below — a secret topic is generated and a confirmation push is sent so you can
+      verify it works.
+    </div>
+    <div class="stage-buttons">
+      <form method="post" action="/notifications/register"><button type="submit" class="btn">🔔 Register for notifications</button></form>
+    </div>`;
+}
+
+// Banner shown after a /notifications/* action redirects back to the dashboard.
+// 'registered' reads the live topic so the operator sees exactly what to subscribe to.
+function notificationsBanner(kind, config) {
+  const topic = ((config.notifications && config.notifications.ntfy) || {}).topic || '';
+  switch (kind) {
+    case 'registered':
+      return `<div class="banner">🔔 Notifications enabled. Subscribe to topic ` +
+        `<code>${escapeHtml(topic)}</code> in the ntfy app — a confirmation push was sent.</div>`;
+    case 'tested':
+      return '<div class="banner">✓ Test notification sent.</div>';
+    case 'disabled':
+      return '<div class="banner">Notifications disabled.</div>';
+    case 'test-failed':
+      return '<div class="banner error">Could not send the test notification — check the ntfy server/topic and the bot log.</div>';
+    default:
+      return '';
+  }
+}
+
 function renderStageButtons(s) {
   const formSent = !!s.mainPollId;
   const reminderSent = !!s.reminderSent;
@@ -300,6 +352,7 @@ function renderPanel({ config, db, whatsapp, banner = '', now = new Date() }) {
     BANNER: banner,
     AUTO_REFRESH: autoRefreshHtml,
     WHATSAPP_STATUS: renderWhatsappStatus(whatsapp),
+    NOTIFICATIONS: renderNotifications(config),
     NEXT_WEEK: escapeHtml(weekRangeLabel(ctx.nextWeek, ctx.tz)),
     NEXT_POLL_TIME: escapeHtml(ctx.nextPollTime),
     FORM_URL: escapeHtml(formUrl),
@@ -361,7 +414,7 @@ function triggerRestart() {
 
 // ─── App factory ──────────────────────────────────────────────────────────────
 
-function create({ config, db, whatsapp, googleForm }) {
+function create({ config, db, whatsapp, googleForm, notifier }) {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', 1);
@@ -428,6 +481,8 @@ function create({ config, db, whatsapp, googleForm }) {
         banner = `<div class="banner">${SUCCESS_BANNERS[successKey]}</div>`;
       } else if (req.query.err && ERROR_BANNERS[req.query.err]) {
         banner = `<div class="banner error">${ERROR_BANNERS[req.query.err]}</div>`;
+      } else if (req.query.notif) {
+        banner = notificationsBanner(req.query.notif, config);
       }
       const html = renderPanel({ config, db, whatsapp, banner });
       res.type('text/html').send(html);
@@ -623,6 +678,63 @@ function create({ config, db, whatsapp, googleForm }) {
     } catch (err) {
       logger.error('regenerate-secret error:', err);
       res.status(500).type('text/plain').send('Internal error');
+    }
+  });
+
+  // ── Notifications ──────────────────────────────────────────────────────────
+  // Mutate the in-memory `config` (the same object the notifier reads live) AND
+  // persist to disk, so changes take effect immediately with no restart — same
+  // pattern as change-password / regenerate-secret.
+
+  app.post('/notifications/register', requireAuth, async (req, res) => {
+    try {
+      const cfg = readConfig();
+      cfg.notifications = cfg.notifications || {};
+      const ntfy = cfg.notifications.ntfy || {};
+      if (!ntfy.topic) {
+        ntfy.topic = 'dnd-bot-' + crypto.randomBytes(16).toString('hex');
+      }
+      ntfy.server = ntfy.server || 'https://ntfy.sh';
+      ntfy.enabled = true;
+      cfg.notifications.ntfy = ntfy;
+      // Reflect into the running process's config before sending the test push.
+      config.notifications = config.notifications || {};
+      config.notifications.ntfy = ntfy;
+      const backupPath = backupAndWrite(cfg);
+      logger.info(`[admin] notifications registered (topic set); backup at ${backupPath}`);
+      if (notifier) await notifier.test();
+      return res.redirect('/?notif=registered');
+    } catch (err) {
+      logger.error('notifications register error:', err);
+      return res.status(500).type('text/plain').send('Internal error');
+    }
+  });
+
+  app.post('/notifications/test', requireAuth, async (req, res) => {
+    try {
+      const result = notifier ? await notifier.test() : { sent: false };
+      return res.redirect(result && result.sent ? '/?notif=tested' : '/?notif=test-failed');
+    } catch (err) {
+      logger.error('notifications test error:', err);
+      return res.redirect('/?notif=test-failed');
+    }
+  });
+
+  app.post('/notifications/disable', requireAuth, (req, res) => {
+    try {
+      const cfg = readConfig();
+      cfg.notifications = cfg.notifications || {};
+      cfg.notifications.ntfy = cfg.notifications.ntfy || {};
+      cfg.notifications.ntfy.enabled = false;
+      config.notifications = config.notifications || {};
+      config.notifications.ntfy = config.notifications.ntfy || {};
+      config.notifications.ntfy.enabled = false;
+      const backupPath = backupAndWrite(cfg);
+      logger.info(`[admin] notifications disabled; backup at ${backupPath}`);
+      return res.redirect('/?notif=disabled');
+    } catch (err) {
+      logger.error('notifications disable error:', err);
+      return res.status(500).type('text/plain').send('Internal error');
     }
   });
 

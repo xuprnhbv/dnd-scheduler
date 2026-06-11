@@ -24,6 +24,14 @@
     "passwordHash": "REPLACE_WITH_BCRYPT_HASH",
     "sessionSecret": "REPLACE_WITH_LONG_RANDOM_STRING"
   },
+  "notifications": {
+    "ntfy": {
+      "enabled": false,
+      "server": "https://ntfy.sh",
+      "topic": "",
+      "authToken": ""
+    }
+  },
   "sessionTimes": {
     "eventDurationHours": 5,
     "slotTimeKeywords": {

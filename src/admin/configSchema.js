@@ -199,6 +199,44 @@ const SCHEMA = [
     keyPlaceholder: 'שבת ערב',
   },
 
+  // ── Notifications ──────────────────────────────────────────────────────────
+  {
+    path: 'notifications.ntfy.enabled',
+    section: 'notifications',
+    label: 'Enable push notifications',
+    help: 'Master switch for ntfy push notifications (alerts you when the WhatsApp session needs re-linking). Use the Register button on the dashboard for first-time setup.',
+    type: 'checkbox',
+    required: false,
+    default: false,
+  },
+  {
+    path: 'notifications.ntfy.server',
+    section: 'notifications',
+    label: 'ntfy server',
+    help: 'Base URL of the ntfy server. Defaults to the public https://ntfy.sh.',
+    type: 'url',
+    required: false,
+    placeholder: 'https://ntfy.sh',
+  },
+  {
+    path: 'notifications.ntfy.topic',
+    section: 'notifications',
+    label: 'ntfy topic',
+    help: 'Secret topic to publish to. Subscribe to this exact topic in the ntfy phone app. Anyone who knows it can read your alerts, so keep it secret — the Register button generates a long random one.',
+    type: 'string',
+    required: false,
+    placeholder: 'dnd-bot-xxxxxxxx',
+  },
+  {
+    path: 'notifications.ntfy.authToken',
+    section: 'notifications',
+    label: 'ntfy auth token',
+    help: 'Optional bearer token for protected or self-hosted ntfy servers. Leave blank for the public server.',
+    type: 'password',
+    required: false,
+    omitOnSave: false,
+  },
+
   // ── Admin panel ──────────────────────────────────────────────────────────────
   {
     path: 'adminPanel.port',
@@ -331,6 +369,7 @@ const SECTION_TITLES = {
   bot: 'Bot',
   googleForm: 'Google Form',
   sessionTimes: 'Session times (optional)',
+  notifications: 'Notifications',
   adminPanel: 'Admin panel',
   messages: 'Messages',
 };
