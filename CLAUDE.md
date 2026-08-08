@@ -52,7 +52,7 @@ Express app at `config.adminPanel.port` (default 3000). Password-protected (bcry
 slots editable → form announced (slots locked, mainPollId = announcement msg id) → reminder sent → winner announced / tiebreaker posted → tiebreaker decided
 ```
 
-**`postFormLink` ordering.** Send + pin + `db.setMainPoll()` happen FIRST; `googleForm.deleteAllResponses()` is the LAST step. A send failure must not wipe last week's responses without a replacement announcement.
+**`postFormLink` ordering.** `sendText` → `db.setMainPoll()` → `pinMessage` → `googleForm.deleteAllResponses()` (LAST). The DB write happens right after the send succeeds and *before* the pin, so neither a transient pin failure nor a degraded return object can leave the week unmarked. Note: whatsapp-web.js sometimes resolves `sendMessage` with a Message whose `id._serialized` is empty and whose `pin()` is missing — the message still went out, so `msgId` falls back to a synthetic `sent:<week>:<ts>` id (mainPollId is only ever a truthy "announced" gate, never re-fetched). And `deleteAllResponses()` stays last: a send failure must not wipe last week's responses without a replacement announcement.
 
 **DM availability filter** (`src/jobs/announceWinner.js` → `applyDmFilter`): if `config.dmNumber` is set, only slots that the DM voted for are eligible. If the DM voted for none, `dmUnavailable` message is sent and the week is cancelled.
 
