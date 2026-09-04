@@ -135,6 +135,7 @@ function createWhatsApp(db = null, notifier = null) {
   let readyResolvers = [];
   let destroyed = false; // set on intentional destroy() so reconnect loop stops
   let initInFlight = null; // single-flight guard: the in-progress init() promise, if any
+  let clientGeneration = 0; // bumped for each new Client; stale clients' events are ignored
   let sessionLostNotified = false; // throttle the loud SESSION LOST error
   let lastReadyAt = null;
   let lastQrAt = null;
@@ -211,6 +212,14 @@ function createWhatsApp(db = null, notifier = null) {
     destroyed = false;
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      // Claim a fresh generation BEFORE tearing down the old client, so the
+      // outgoing client's listeners are already stale when destroy() makes it
+      // emit 'disconnected' — otherwise that teardown-time disconnect would
+      // schedule a reinit of the healthy client we're about to build (the churn
+      // that silently detaches frames mid-send). Every listener below closes
+      // over `myGeneration` and no-ops once a newer client supersedes it.
+      const myGeneration = ++clientGeneration;
+
       // Destroy any previous instance before creating a new one, and clear
       // any singleton locks a dirty exit left in the profile dir.
       await teardownClient();
@@ -255,6 +264,7 @@ function createWhatsApp(db = null, notifier = null) {
       client.on('auth_failure', (msg) => logger.error('WhatsApp auth failure:', msg));
 
       client.on('ready', () => {
+        if (myGeneration !== clientGeneration) return; // superseded by a newer client
         logger.info('WhatsApp client ready');
         notifyReady();
       });
@@ -262,10 +272,18 @@ function createWhatsApp(db = null, notifier = null) {
       // On disconnect, spin up a brand-new client after a short delay.
       // We use the module-level `init()` so the reconnect also gets retries.
       client.on('disconnected', (reason) => {
+        if (myGeneration !== clientGeneration) {
+          // A disconnect from a client we've already replaced (e.g. emitted by
+          // the old instance during teardown). Ignoring it is what stops a
+          // reinit storm.
+          logger.debug(`WhatsApp disconnect from stale client gen ${myGeneration}: ${reason}`);
+          return;
+        }
         logger.warn('WhatsApp disconnected:', reason);
         ready = false;
         if (destroyed) return; // intentional shutdown — don't reconnect
         setTimeout(() => {
+          if (myGeneration !== clientGeneration) return; // a newer init already ran
           logger.info('Attempting to reinitialize WhatsApp client...');
           init().catch((err) => logger.error('Reinit failed:', err));
         }, 5000);
@@ -347,37 +365,57 @@ function createWhatsApp(db = null, notifier = null) {
   }
 
   // Sends are bounded so a wedged browser fails the job fast (and visibly)
-  // instead of hanging it forever. The timeout error is deliberately NOT a
-  // transient pattern: if the send actually landed but the ack stalled, a
-  // reinit-and-resend would duplicate the message. Recovery comes from the
-  // liveness probe healing the client and the scheduler retrying the job.
+  // instead of hanging it forever.
   const SEND_TIMEOUT_MS = 120000;
 
+  // A send is attempted EXACTLY ONCE — deliberately NOT wrapped in
+  // withTransientRetry. `client.sendMessage` dispatches the message early and
+  // only then waits for the ack/hydration; if that later step throws (a
+  // detached frame, a teardown mid-send) or times out, the message may already
+  // have reached the group. Re-invoking sendMessage — here or via a scheduler
+  // retry — would duplicate it, which is exactly the bug this refactor removes.
+  //
+  // So any failure from the send itself is tagged `err.uncertain = true`: the
+  // caller/scheduler MUST NOT retry it (see scheduler.js). A transient
+  // puppeteer error additionally means the frame is gone, so we heal the client
+  // in the background (fire-and-forget, so the NEXT op is healthy) but still
+  // throw rather than resend. Failures from ensureReady() happen BEFORE any
+  // dispatch and stay untagged — those are safe for the scheduler to retry.
+  async function sendOnce(opName, makeSend) {
+    await ensureReady();
+    try {
+      return await withTimeout(makeSend(), SEND_TIMEOUT_MS, opName);
+    } catch (err) {
+      if (err) err.uncertain = true;
+      if (isTransientPuppeteerError(err)) {
+        logger.warn(
+          `[whatsapp] ${opName} hit a transient error after dispatch: ${err.message}. ` +
+          `Healing the client in the background; NOT resending (the message may have landed).`,
+        );
+        ready = false;
+        init().catch((e) => logger.error(`[whatsapp] background reinit after ${opName} failed:`, e));
+      } else {
+        logger.warn(
+          `[whatsapp] ${opName} failed after dispatch: ${err && err.message}. ` +
+          `NOT resending (the message may have landed).`,
+        );
+      }
+      throw err;
+    }
+  }
+
   async function sendText(chatId, text, options = {}) {
-    return withTransientRetry('sendText', async () => {
-      await ensureReady();
-      return withTimeout(client.sendMessage(chatId, text, options), SEND_TIMEOUT_MS, 'sendText');
-    });
+    return sendOnce('sendText', () => client.sendMessage(chatId, text, options));
   }
 
   async function sendPoll(chatId, question, options, { allowMultipleAnswers = true } = {}) {
-    return withTransientRetry('sendPoll', async () => {
-      await ensureReady();
-      const poll = new Poll(question, options, { allowMultipleAnswers });
-      return withTimeout(client.sendMessage(chatId, poll), SEND_TIMEOUT_MS, 'sendPoll');
-    });
+    const poll = new Poll(question, options, { allowMultipleAnswers });
+    return sendOnce('sendPoll', () => client.sendMessage(chatId, poll));
   }
 
   async function sendEvent(chatId, name, startTime, { endTime, description } = {}) {
-    return withTransientRetry('sendEvent', async () => {
-      await ensureReady();
-      const event = new ScheduledEvent(name, startTime, {
-        endTime,
-        description,
-        callType: 'none',
-      });
-      return withTimeout(client.sendMessage(chatId, event), SEND_TIMEOUT_MS, 'sendEvent');
-    });
+    const event = new ScheduledEvent(name, startTime, { endTime, description, callType: 'none' });
+    return sendOnce('sendEvent', () => client.sendMessage(chatId, event));
   }
 
   // Pin a message for the given duration (default 7 days).
@@ -390,7 +428,12 @@ function createWhatsApp(db = null, notifier = null) {
       return;
     }
 
-    return withTransientRetry('pinMessage', async () => {
+    // Fully best-effort: pinning is cosmetic, and a pin failure must NEVER
+    // propagate. By the time we pin, the job has already recorded that the
+    // message went out, so a throw here would only fail the job, trigger a
+    // scheduler retry, and resend a message that already landed. Swallow
+    // everything (transient errors included) and just warn.
+    try {
       await ensureReady();
       const chatId = msg.id && msg.id.remote;
 
@@ -404,24 +447,20 @@ function createWhatsApp(db = null, notifier = null) {
               logger.info('[pinMessage] unpinned previous bot-pinned message', prevId);
             }
           } catch (err) {
-            if (isTransientPuppeteerError(err)) throw err;
             logger.warn('[pinMessage] could not unpin previous message', prevId, ':', err.message);
           }
           db.removeBotPinnedMessage(chatId, prevId);
         }
       }
 
-      try {
-        await withTimeout(msg.pin(durationSecs), 30000, 'pin');
-        logger.info('[pinMessage] message pinned for', durationSecs, 'seconds');
-        if (db && chatId && msg.id._serialized) {
-          db.addBotPinnedMessage(chatId, msg.id._serialized);
-        }
-      } catch (err) {
-        if (isTransientPuppeteerError(err)) throw err;
-        logger.warn('[pinMessage] could not pin message (bot may not be a group admin):', err.message);
+      await withTimeout(msg.pin(durationSecs), 30000, 'pin');
+      logger.info('[pinMessage] message pinned for', durationSecs, 'seconds');
+      if (db && chatId && msg.id._serialized) {
+        db.addBotPinnedMessage(chatId, msg.id._serialized);
       }
-    });
+    } catch (err) {
+      logger.warn('[pinMessage] pin failed (non-fatal):', err && err.message);
+    }
   }
 
   // Fetch a message by chatId + serialized message id. Returns null if missing.

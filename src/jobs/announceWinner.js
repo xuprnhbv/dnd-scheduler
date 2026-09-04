@@ -4,7 +4,7 @@ const { DateTime } = require('luxon');
 const { currentWeekStart } = require('../slots');
 const { resolveSlotRange } = require('../sessionTime');
 const logger = require('../logger');
-const { renderTemplate } = require('./jobUtils');
+const { renderTemplate, sentMessageId, runStage } = require('./jobUtils');
 
 const EVENT_TITLE_FORMAT = 'ccc, LLL d';
 
@@ -89,10 +89,14 @@ async function run({ config, db, whatsapp, googleForm, now = new Date() }) {
   const { playerResponses, dmResponse } = await googleForm.readResponses();
 
   if (!dmResponse) {
+    // Intentionally repeatable: no gate is written, so the next scheduled run
+    // re-nudges if the DM still hasn't voted.
     const dmNoResponseText = config.messages.dmNoResponse
       || "⏳ The DM hasn't filled the form yet — holding off on picking a slot.";
-    const dmNoResponseMsg = await whatsapp.sendText(config.groupId, dmNoResponseText);
-    await whatsapp.pinMessage(dmNoResponseMsg);
+    await runStage({
+      whatsapp,
+      send: () => whatsapp.sendText(config.groupId, dmNoResponseText),
+    });
     logger.info(`[announceWinner] DM has not responded yet for week ${weekStart}; will retry`);
     return { skipped: false, outcome: 'dm-no-response' };
   }
@@ -100,9 +104,11 @@ async function run({ config, db, whatsapp, googleForm, now = new Date() }) {
   const counts = tallyCounts(playerResponses);
 
   if (Object.keys(counts.yes).length === 0 && Object.keys(counts.maybe).length === 0) {
-    const noRespMsg = await whatsapp.sendText(config.groupId, config.messages.noResponses);
-    await whatsapp.pinMessage(noRespMsg);
-    db.setWinner(weekStart, '');
+    await runStage({
+      whatsapp,
+      send: () => whatsapp.sendText(config.groupId, config.messages.noResponses),
+      record: () => db.setWinner(weekStart, ''),
+    });
     logger.info(`[announceWinner] no responses for week ${weekStart}`);
     return { skipped: false, outcome: 'no-responses' };
   }
@@ -112,9 +118,11 @@ async function run({ config, db, whatsapp, googleForm, now = new Date() }) {
   if (dmHadNoSlots) {
     const dmUnavailText = config.messages.dmUnavailable
       || '🎲 The DM has no available slots this week — session cancelled.';
-    const dmUnavailMsg = await whatsapp.sendText(config.groupId, dmUnavailText);
-    await whatsapp.pinMessage(dmUnavailMsg);
-    db.setWinner(weekStart, '');
+    await runStage({
+      whatsapp,
+      send: () => whatsapp.sendText(config.groupId, dmUnavailText),
+      record: () => db.setWinner(weekStart, ''),
+    });
     logger.info(`[announceWinner] DM has no slots overlapping player picks for week ${weekStart}`);
     return { skipped: false, outcome: 'dm-unavailable' };
   }
@@ -142,31 +150,38 @@ async function run({ config, db, whatsapp, googleForm, now = new Date() }) {
   if (tied.length === 1) {
     const winner = tied[0];
     const text = renderTemplate(config.messages.winner, { slot: winner });
-    const winnerMsg = await sendSessionAnnouncement({
-      whatsapp, config, weekStart, slotLabel: winner, text,
+    await runStage({
+      whatsapp,
+      send: () => sendSessionAnnouncement({ whatsapp, config, weekStart, slotLabel: winner, text }),
+      // Record only after the send resolves and before the pin; a mid-send
+      // failure leaves the week unannounced so a later run retries cleanly.
+      record: () => db.setWinner(weekStart, winner),
     });
-    await whatsapp.pinMessage(winnerMsg);
-    // Mark announced only after the message actually went out; if sendSessionAnnouncement
-    // throws (e.g. puppeteer "detached Frame"), the week stays unannounced and a retry
-    // will re-send instead of being skipped by the idempotency check above.
-    db.setWinner(weekStart, winner);
     logger.info(`[announceWinner] winner: ${winner}`);
     return { skipped: false, outcome: 'winner', winner };
   }
 
   // Tie — post a tiebreaker WhatsApp poll with only the tied DM-approved options.
+  // The poll's question already carries the intro, so we do NOT also send it as
+  // a separate text message (that was a redundant second send and the worst
+  // duplicate-window in the old code).
   const intro = renderTemplate(config.messages.tiebreakerIntro, {
     slots: tied.join(', '),
   });
-  await whatsapp.sendText(config.groupId, intro);
-
-  const msg = await whatsapp.sendPoll(config.groupId, intro, tied, {
-    allowMultipleAnswers: false,
+  let pollId;
+  await runStage({
+    whatsapp,
+    send: () => whatsapp.sendPoll(config.groupId, intro, tied, { allowMultipleAnswers: false }),
+    record: (msg) => {
+      const ts = Math.floor(DateTime.now().setZone(config.timezone).toSeconds());
+      const { id, synthetic } = sentMessageId(msg, `tie:${weekStart}`);
+      pollId = id;
+      if (synthetic) {
+        logger.warn(`[announceWinner] tiebreaker poll returned no usable id; recorded synthetic ${id} (vote-reading may fail)`);
+      }
+      db.setTiebreaker(weekStart, id, ts);
+    },
   });
-  await whatsapp.pinMessage(msg);
-  const pollId = msg.id && msg.id._serialized ? msg.id._serialized : String(msg.id || '');
-  const ts = Math.floor(DateTime.now().setZone(config.timezone).toSeconds());
-  db.setTiebreaker(weekStart, pollId, ts);
 
   logger.info(`[announceWinner] tie between ${tied.length} DM-approved options, tiebreaker ${pollId}`);
   return { skipped: false, outcome: 'tie', tied, tiebreakerPollId: pollId };

@@ -3,9 +3,9 @@
 const { currentWeekStart } = require('../slots');
 const { findTopOptions, sendSessionAnnouncement } = require('./announceWinner');
 const logger = require('../logger');
-const { renderTemplate } = require('./jobUtils');
+const { renderTemplate, runStage } = require('./jobUtils');
 
-async function run({ config, db, whatsapp, googleForm, now = new Date() }) {
+async function run({ config, db, whatsapp, now = new Date() }) {
   const weekStart = currentWeekStart(now, config.timezone);
   const state = db.getState(weekStart);
 
@@ -33,13 +33,13 @@ async function run({ config, db, whatsapp, googleForm, now = new Date() }) {
   }
 
   const text = renderTemplate(config.messages.tiebreakerWinner, { slot: winner });
-  const winnerMsg = await sendSessionAnnouncement({
-    whatsapp, config, weekStart, slotLabel: winner, text,
+  await runStage({
+    whatsapp,
+    send: () => sendSessionAnnouncement({ whatsapp, config, weekStart, slotLabel: winner, text }),
+    // Record only after the send resolves and before the pin; a mid-send failure
+    // leaves the week unannounced so a later run retries cleanly.
+    record: () => db.setTiebreakerWinner(weekStart, winner),
   });
-  await whatsapp.pinMessage(winnerMsg);
-  // Mark announced only after the message actually went out; if sendSessionAnnouncement
-  // throws, the week stays unannounced and a retry will re-send.
-  db.setTiebreakerWinner(weekStart, winner);
 
   logger.info(`[announceTiebreaker] tiebreaker winner: ${winner}`);
   return { skipped: false, winner };

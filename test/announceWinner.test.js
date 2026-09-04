@@ -3,11 +3,100 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+const announceWinner = require('../src/jobs/announceWinner');
 const {
   findTopOptions,
   tallyCounts,
   applyDmFilter,
-} = require('../src/jobs/announceWinner');
+} = announceWinner;
+
+// --- fakes for run() behaviour tests ------------------------------------------
+
+// getState/ensureState ignore the week key and return the single mutable state;
+// run() only reads mainPollId / winnerAnnounced / tiebreakerPollId from it.
+function makeDb(initial = { mainPollId: 'form1' }) {
+  const state = { winnerAnnounced: false, tiebreakerPollId: null, ...initial };
+  return {
+    getState: () => ({ ...state }),
+    ensureState: () => ({ ...state }),
+    setWinner: (_w, slot) => { state.winnerAnnounced = true; state.winnerSlot = slot; },
+    setTiebreaker: (_w, id, ts) => { state.tiebreakerPollId = id; state.tiebreakerPollTimestamp = ts; },
+    _get: () => state,
+  };
+}
+
+function makeWhatsapp({ pinThrows = false } = {}) {
+  const calls = { sendText: [], sendPoll: [], sendEvent: [], pinned: [] };
+  return {
+    calls,
+    async sendText(_chatId, text) { calls.sendText.push(text); return { id: { _serialized: `text_${calls.sendText.length}` } }; },
+    async sendPoll(_chatId, question, options) { calls.sendPoll.push({ question, options }); return { id: { _serialized: `poll_${calls.sendPoll.length}` } }; },
+    async sendEvent(_chatId, name) { calls.sendEvent.push(name); return { id: { _serialized: `event_${calls.sendEvent.length}` } }; },
+    async pinMessage(m) { calls.pinned.push(m); if (pinThrows) throw new Error('pin boom'); },
+  };
+}
+
+function makeConfig() {
+  return {
+    timezone: 'Asia/Jerusalem',
+    groupId: 'g@g.us',
+    // no sessionTimes → sendSessionAnnouncement falls back to sendText
+    messages: {
+      winner: 'Winner: {slot}',
+      noResponses: 'no responses',
+      tiebreakerIntro: 'tie among {slots}',
+      dmUnavailable: 'dm unavailable',
+    },
+  };
+}
+
+const makeGoogleForm = (responses) => ({ async readResponses() { return responses; } });
+const WED = new Date('2026-08-05T06:00:00Z');
+
+test('run: tie path sends exactly one message — the poll, no redundant intro text', async () => {
+  const db = makeDb();
+  const whatsapp = makeWhatsapp();
+  const googleForm = makeGoogleForm({
+    playerResponses: [{ yes: ['A', 'B'], maybe: [] }, { yes: ['A', 'B'], maybe: [] }],
+    dmResponse: ['A', 'B'],
+  });
+  const res = await announceWinner.run({ config: makeConfig(), db, whatsapp, googleForm, now: WED });
+
+  assert.equal(res.outcome, 'tie');
+  assert.equal(whatsapp.calls.sendPoll.length, 1, 'exactly one poll sent');
+  assert.equal(whatsapp.calls.sendText.length, 0, 'no separate intro text (it lives in the poll question)');
+  assert.ok(db._get().tiebreakerPollId, 'tiebreaker recorded before returning');
+});
+
+test('run: winner is recorded even when pinning throws (flag written before pin)', async () => {
+  const db = makeDb();
+  const whatsapp = makeWhatsapp({ pinThrows: true });
+  const googleForm = makeGoogleForm({
+    playerResponses: [{ yes: ['A'], maybe: [] }, { yes: ['A'], maybe: [] }],
+    dmResponse: ['A'],
+  });
+  const res = await announceWinner.run({ config: makeConfig(), db, whatsapp, googleForm, now: WED });
+
+  assert.equal(res.outcome, 'winner');
+  assert.equal(res.winner, 'A');
+  assert.equal(db._get().winnerAnnounced, true, 'winner recorded despite the pin failure');
+});
+
+test('run: an uncertain send failure propagates and records nothing', async () => {
+  const db = makeDb();
+  const whatsapp = makeWhatsapp();
+  whatsapp.sendText = async () => { const e = new Error('sendText timed out'); e.uncertain = true; throw e; };
+  const googleForm = makeGoogleForm({
+    playerResponses: [{ yes: ['A'], maybe: [] }, { yes: ['A'], maybe: [] }],
+    dmResponse: ['A'],
+  });
+
+  await assert.rejects(
+    () => announceWinner.run({ config: makeConfig(), db, whatsapp, googleForm, now: WED }),
+    (err) => err.uncertain === true,
+  );
+  assert.equal(db._get().winnerAnnounced, false, 'nothing recorded when the send is uncertain');
+});
 
 test('tallyCounts counts yes and maybe across player responses', () => {
   const counts = tallyCounts([

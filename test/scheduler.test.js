@@ -36,6 +36,20 @@ test('wrap gives up after exhausting retries', async () => {
   assert.equal(calls, 3, 'initial attempt + 2 retries, then stop');
 });
 
+test('wrap does not retry an uncertain (may-have-sent) failure', async () => {
+  let calls = 0;
+  const trigger = wrap('test:uncertain', async () => {
+    calls += 1;
+    const err = new Error('sendText timed out after 120000ms');
+    err.uncertain = true; // the message may already be in the group
+    throw err;
+  }, { retries: 2, retryDelayMs: 10 });
+
+  await trigger();
+  await sleep(120);
+  assert.equal(calls, 1, 'an uncertain send must be attempted exactly once, never retried');
+});
+
 test('wrap does not retry when the job succeeds', async () => {
   let calls = 0;
   const trigger = wrap('test:healthy', async () => {
