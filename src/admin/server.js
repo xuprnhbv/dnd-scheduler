@@ -22,6 +22,7 @@ const sendReminder = require('../jobs/sendReminder');
 const announceWinner = require('../jobs/announceWinner');
 const announceTiebreaker = require('../jobs/announceTiebreaker');
 const logger = require('../logger');
+const { withJobLock } = require('../jobLock');
 const { SCHEMA, SECTIONS, SECTION_TITLES } = require('./configSchema');
 const {
   flattenForm,
@@ -518,7 +519,10 @@ function create({ config, db, whatsapp, googleForm, notifier }) {
         return res.redirect('/?err=already-sent');
       }
       logger.info('admin manually triggering postFormLink');
-      await postFormLink.run({ config, db, whatsapp, googleForm });
+      // Serialize against the cron run of the same stage; if the scheduler is
+      // mid-flight, this waits and then postFormLink.run re-reads the (now-set)
+      // gate and skips instead of double-sending.
+      await withJobLock('postFormLink', () => postFormLink.run({ config, db, whatsapp, googleForm }));
       return res.redirect('/?sent=1');
     } catch (err) {
       logger.error('admin send-form error:', err);
@@ -536,7 +540,9 @@ function create({ config, db, whatsapp, googleForm, notifier }) {
           if (condition) return res.redirect(`/?err=${errParam}`);
         }
         logger.info(`admin manually triggering ${logName}`);
-        await jobModule.run({ config, db, whatsapp, googleForm });
+        // logName matches the scheduler's lock key for this stage, so a manual
+        // trigger and the cron run are mutually exclusive (see jobLock.js).
+        await withJobLock(logName, () => jobModule.run({ config, db, whatsapp, googleForm }));
         return res.redirect(`/?${redirectParam}=1`);
       } catch (err) {
         logger.error(`admin ${logName} error:`, err);

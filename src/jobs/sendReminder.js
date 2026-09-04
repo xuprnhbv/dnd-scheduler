@@ -2,7 +2,7 @@
 
 const { currentWeekStart } = require('../slots');
 const logger = require('../logger');
-const { renderTemplate } = require('./jobUtils');
+const { renderTemplate, runStage } = require('./jobUtils');
 
 async function run({ config, db, whatsapp, googleForm, now = new Date() }) {
   const weekStart = currentWeekStart(now, config.timezone);
@@ -41,9 +41,12 @@ async function run({ config, db, whatsapp, googleForm, now = new Date() }) {
       formUrl: config.googleForm.publicUrl,
     });
   }
-  const msg = await whatsapp.sendText(config.groupId, text);
-  await whatsapp.pinMessage(msg);
-  db.setReminderSent(weekStart);
+
+  await runStage({
+    whatsapp,
+    send: () => whatsapp.sendText(config.groupId, text),
+    record: () => db.setReminderSent(weekStart),
+  });
 
   logger.info(`[sendReminder] reminded — ${filledCount}/${playerCount} filled for week ${weekStart}`);
   return { skipped: false, filledCount, playerCount };

@@ -2,6 +2,7 @@
 
 const cron = require('node-cron');
 const logger = require('./logger');
+const { withJobLock } = require('./jobLock');
 
 const postFormLink = require('./jobs/postFormLink');
 const sendReminder = require('./jobs/sendReminder');
@@ -13,11 +14,23 @@ const MAX_RETRIES = 2;
 
 // Wrap a job for cron: log start/finish, and retry a failed run a couple of
 // times before giving up until the next scheduled fire. Jobs are idempotent
-// (they check DB flags before acting, and flip them only after a successful
-// send), so re-running after a transient failure is safe — and without it a
-// failed send would silently wait a whole week. The `running`/`retryPending`
-// flags keep retries from stacking or overlapping a live run.
-function wrap(name, fn, { retries = MAX_RETRIES, retryDelayMs = RETRY_DELAY_MS } = {}) {
+// (they check DB flags before acting, and record them the instant a send
+// resolves), so re-running a genuine pre-send failure is safe — and without it a
+// failed send would silently wait a whole week.
+//
+// The one failure that must NOT be retried is an "uncertain" send (err.uncertain,
+// set by whatsapp.js when a send throws or times out AFTER dispatch): the message
+// may already be in the group, so a retry would duplicate it. Those are surfaced
+// to the operator via the notifier instead, to check the group / re-trigger from
+// the admin panel.
+//
+// Every run also goes through withJobLock(lockKey), which serializes this job
+// against the admin panel's manual-trigger route for the same stage so a manual
+// trigger racing the cron can't double-send. The `running`/`retryPending` flags
+// keep this cron's own retries from stacking or overlapping a live run.
+function wrap(name, fn, {
+  retries = MAX_RETRIES, retryDelayMs = RETRY_DELAY_MS, notifier = null, lockKey = name,
+} = {}) {
   let running = false;
   let retryPending = false;
 
@@ -30,10 +43,25 @@ function wrap(name, fn, { retries = MAX_RETRIES, retryDelayMs = RETRY_DELAY_MS }
     const start = Date.now();
     logger.info(`[cron] ${name} starting${attempt > 0 ? ` (retry ${attempt}/${retries})` : ''}`);
     try {
-      const result = await fn();
+      const result = await withJobLock(lockKey, fn);
       logger.info(`[cron] ${name} done in ${Date.now() - start}ms`, result || {});
     } catch (err) {
       logger.error(`[cron] ${name} failed:`, err);
+      if (err && err.uncertain) {
+        logger.error(
+          `[cron] ${name} send could not be confirmed — NOT retrying to avoid a duplicate. ` +
+          `Check the group; re-trigger from the admin panel if the message is missing.`,
+        );
+        if (notifier) {
+          Promise.resolve(notifier.send({
+            title: 'D&D bot: unconfirmed send',
+            message: `"${name}" may not have gone through. Check the group and re-trigger from the admin panel if it's missing.`,
+            priority: 'high',
+            tags: 'warning',
+          })).catch((e) => logger.warn(`[cron] ${name} notify failed:`, e.message));
+        }
+        return; // uncertain send — do not retry
+      }
       if (attempt < retries && !retryPending) {
         retryPending = true;
         logger.info(`[cron] ${name} retrying in ${Math.round(retryDelayMs / 60000)} min (${attempt + 1}/${retries})`);
@@ -51,9 +79,9 @@ function wrap(name, fn, { retries = MAX_RETRIES, retryDelayMs = RETRY_DELAY_MS }
   return () => runAttempt(0);
 }
 
-function start({ config, db, whatsapp, googleForm }) {
+function start({ config, db, whatsapp, googleForm, notifier = null }) {
   const tz = config.timezone;
-  const ctx = { config, db, whatsapp, googleForm };
+  const ctx = { config, db, whatsapp, googleForm, notifier };
 
   // Warmups, 15 minutes before each job: verify the browser is actually alive
   // and pay any reinit cost (~1-2 min) BEFORE the send fires, so the message
@@ -63,13 +91,13 @@ function start({ config, db, whatsapp, googleForm }) {
   cron.schedule('15 8 * * 3', wrap('warmup:announceWinner', () => whatsapp.warmup()), { timezone: tz });
 
   // Sunday 08:30 — announce the form link in the group
-  cron.schedule('30 8 * * 0', wrap('postFormLink', () => postFormLink.run(ctx)), { timezone: tz });
+  cron.schedule('30 8 * * 0', wrap('postFormLink', () => postFormLink.run(ctx), { notifier }), { timezone: tz });
 
   // Tuesday 08:30 — remind everyone to fill the form
-  cron.schedule('30 8 * * 2', wrap('sendReminder', () => sendReminder.run(ctx)), { timezone: tz });
+  cron.schedule('30 8 * * 2', wrap('sendReminder', () => sendReminder.run(ctx), { notifier }), { timezone: tz });
 
   // Wednesday 08:30 — announce winner or trigger tiebreaker
-  cron.schedule('30 8 * * 3', wrap('announceWinner', () => announceWinner.run(ctx)), { timezone: tz });
+  cron.schedule('30 8 * * 3', wrap('announceWinner', () => announceWinner.run(ctx), { notifier }), { timezone: tz });
 
   // Wednesday 19:45 — warm up only when a tiebreaker job will actually run;
   // a warmup can force a reinit, which isn't worth risking for a no-op.
@@ -88,7 +116,7 @@ function start({ config, db, whatsapp, googleForm }) {
       return announceTiebreaker.run(ctx);
     }
     return { skipped: true, reason: 'no-tiebreaker' };
-  }), { timezone: tz });
+  }, { notifier }), { timezone: tz });
 
   logger.info(`Scheduler started (timezone ${tz})`);
 }
